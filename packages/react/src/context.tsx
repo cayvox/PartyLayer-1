@@ -1,22 +1,33 @@
+'use client';
+
 /**
- * React context for PartyLayer
+ * React context for PartyLayer.
  *
- * Manages wallet listing (registry + native CIP-0103 discovery),
- * session state, and event subscriptions.
+ * Surface kept minimal: the registry-derived wallet list, the active
+ * session, and event subscriptions. Runtime CIP-0103 detection used to
+ * live here (Prompts 7.2-7.5 evolved through several variants) but
+ * proved fragile because every adapter has different transport
+ * semantics and any divergence between the modal's expectation and the
+ * adapter's answer surfaced as a misleading "Ready" indicator.
+ *
+ * Prompt 7.6 simplification: the modal renders the registry directly.
+ * Each adapter's `connect()` flow handles install / QR / popup
+ * fallbacks at click-time, that's where transport-specific knowledge
+ * actually lives, and the right place for it.
+ *
+ * Detection helpers (`detectInstalled`, `matchesProviderDetection`,
+ * `findMatchingWallet`, etc.) remain exported by `@partylayer/sdk`
+ * and `@partylayer/registry-client` for advanced consumers and the
+ * conformance suite: only the picker stops consuming them.
  */
 
-import { createContext, useContext, useEffect, useState } from 'react';
+import { createContext, useContext, useEffect, useRef, useState } from 'react';
 import type {
   PartyLayerClient,
   Session,
   WalletInfo,
 } from '@partylayer/sdk';
-import { discoverInjectedProviders } from '@partylayer/sdk';
-import {
-  createNativeAdapter,
-  createSyntheticWalletInfo,
-  enrichProviderInfo,
-} from './native-cip0103-adapter';
+import { createSessionStore, type SessionStore, type SessionStoreOptions } from '@partylayer/session';
 
 interface PartyLayerContextValue {
   client: PartyLayerClient | null;
@@ -24,6 +35,13 @@ interface PartyLayerContextValue {
   wallets: WalletInfo[];
   isLoading: boolean;
   error: Error | null;
+  /**
+   * Shared framework-agnostic session store (Step 6b). Backed by the client's
+   * CIP-0103 provider and a localStorage adapter. Read by `useAccount` /
+   * `useAccountEffect`. Additive: existing consumers can ignore it; the
+   * legacy `session` field above is unchanged.
+   */
+  store: SessionStore | null;
 }
 
 const PartyLayerContext =
@@ -42,110 +60,103 @@ export function usePartyLayerContext(): PartyLayerContextValue {
 interface PartyLayerProviderProps {
   client: PartyLayerClient;
   children: React.ReactNode;
-  /** Network identifier for native CIP-0103 wallet discovery */
+  /** Network identifier (kept for backward compat; no longer used for native synthesis). */
   network?: string;
+  /**
+   * session-store options merged into the shared store
+   * (`reconnect`, `expiry`, `broadcast`, `persistSnapshot`, `onInvalidate`,
+   * `storage`). Omitted ⇒ today's default (localStorage marker, no
+   * reconnect/broadcast). A provided `storage` overrides the default.
+   */
+  sessionOptions?: Partial<SessionStoreOptions>;
 }
 
 export function PartyLayerProvider({
   client,
   children,
-  network = 'devnet',
+  sessionOptions,
 }: PartyLayerProviderProps) {
   const [session, setSession] = useState<Session | null>(null);
   const [wallets, setWallets] = useState<WalletInfo[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<Error | null>(null);
 
+  // ── Shared session store (6b) ──────────────────────────────────────────────
+  // One store per client, created at render so the hooks can read it on first
+  // paint. Recreated if the `client` prop changes. The mount effect below runs
+  // init()/destroy(); on a StrictMode remount the ref is nulled by cleanup so
+  // the render-phase guard rebuilds a fresh, re-subscribed store.
+  // Re-create the store if the client OR the session options change.
+  const sessionOptionsRef = useRef(sessionOptions);
+  const storeRef = useRef<{ client: PartyLayerClient; store: SessionStore } | null>(null);
+  if (
+    storeRef.current === null ||
+    storeRef.current.client !== client ||
+    sessionOptionsRef.current !== sessionOptions
+  ) {
+    storeRef.current?.store.destroy();
+    sessionOptionsRef.current = sessionOptions;
+    storeRef.current = {
+      client,
+      // 1.0: no pinned storage, inherit the session default (encrypted
+      // IndexedDB where supported, in-memory otherwise). Apps can still pass an
+      // explicit `storage` (e.g. `createLocalStorage()` or `createMemoryStorage()`)
+      // via `sessionOptions`, which is respected.
+      store: createSessionStore(client.asProvider(), {
+        ...sessionOptions,
+      }),
+    };
+  }
+  const store = storeRef.current.store;
+
+  useEffect(() => {
+    // Best-effort: when on the default storage (no explicit override), sweep the
+    // pre-1.0 plain-localStorage marker now that the default moved to encrypted
+    // IndexedDB. One removeItem; swallow errors; SSR-safe.
+    if (!sessionOptionsRef.current?.storage && typeof window !== 'undefined') {
+      try {
+        window.localStorage?.removeItem('partylayer.session.connected');
+      } catch {
+        /* ignore */
+      }
+    }
+    // Restore/reconnect on mount; tear down on unmount.
+    void store.init();
+    return () => {
+      store.destroy();
+      if (storeRef.current?.store === store) storeRef.current = null;
+    };
+  }, [store]);
+
   useEffect(() => {
     let mounted = true;
 
     async function load() {
       try {
-        // Fetch registry wallets and discover native CIP-0103 providers in parallel.
-        // listWallets() is resilient — if registry is unreachable, it falls back
-        // to generating WalletInfo from registered adapters (Console, Loop, etc.)
-        const [sessionData, registryWallets, rawDiscovered] = await Promise.all([
+        // Registry list + active session in parallel. listWallets() is
+        // resilient: if the registry is unreachable, the SDK falls back
+        // to generating WalletInfo entries from the adapters that are
+        // already registered (so the picker still has something to show).
+        const [sessionData, registryWallets] = await Promise.all([
           client.getActiveSession(),
           client.listWallets(),
-          Promise.resolve(discoverInjectedProviders()),
         ]);
 
         if (!mounted) return;
 
-        // Enrich discovered providers with status info (name, etc.)
-        const discovered = await Promise.all(
-          rawDiscovered.map((d) => enrichProviderInfo(d)),
-        );
-
-        if (!mounted) return;
-
-        // Register native adapters with the client and create synthetic WalletInfo
-        const nativeWallets: WalletInfo[] = [];
-        const registryWalletIds = new Set(registryWallets.map((w) => String(w.walletId)));
-
-        for (const dp of discovered) {
-          const adapterId = `cip0103:${dp.id}`;
-          // Skip if there's already a registry wallet that covers this provider
-          if (registryWalletIds.has(adapterId)) continue;
-
-          const adapter = createNativeAdapter(dp);
-          client.registerAdapter(adapter);
-
-          const walletInfo = createSyntheticWalletInfo(dp, network);
-          nativeWallets.push(walletInfo);
-        }
-
-        // Merge: native (detected) wallets first, then registry wallets
-        const mergedWallets = [...nativeWallets, ...registryWallets];
-
         setSession(sessionData);
-        setWallets(mergedWallets);
+        setWallets(registryWallets);
         setIsLoading(false);
       } catch (err) {
         if (mounted) {
           setError(err instanceof Error ? err : new Error('Unknown error'));
-          setWallets([]); // Ensure wallets is empty array on error
+          setWallets([]);
           setIsLoading(false);
         }
       }
     }
 
     load();
-
-    // Delayed re-discovery for late-injecting extensions (e.g. Console Wallet
-    // can take up to 3s to inject into window). Re-scan at 2.5s and merge any
-    // newly found native CIP-0103 providers into the wallet list.
-    const rediscoverTimeout = setTimeout(async () => {
-      if (!mounted) return;
-      try {
-        const newDiscovered = await Promise.resolve(discoverInjectedProviders());
-        const enriched = await Promise.all(
-          newDiscovered.map((d) => enrichProviderInfo(d)),
-        );
-
-        if (!mounted) return;
-
-        setWallets((prev) => {
-          const existingIds = new Set(prev.map((w) => String(w.walletId)));
-          const newNativeWallets: WalletInfo[] = [];
-
-          for (const dp of enriched) {
-            const adapterId = `cip0103:${dp.id}`;
-            if (existingIds.has(adapterId)) continue;
-
-            const adapter = createNativeAdapter(dp);
-            client.registerAdapter(adapter);
-            newNativeWallets.push(createSyntheticWalletInfo(dp, network));
-          }
-
-          if (newNativeWallets.length === 0) return prev;
-          // Prepend newly found native wallets (before registry ones)
-          return [...newNativeWallets, ...prev];
-        });
-      } catch {
-        /* ignore re-discovery failures */
-      }
-    }, 2500);
 
     // Subscribe to events
     const unsubscribeConnect = client.on('session:connected', (event) => {
@@ -172,13 +183,30 @@ export function PartyLayerProvider({
       }
     });
 
+    // Reactive wallet list: when a wallet announces late (e.g. Send injecting
+    // after the picker already loaded), the SDK emits 'wallets:changed', re-list
+    // so the new wallet appears WITHOUT a manual refresh (mirrors EIP-6963/mipd:
+    // store emits, UI re-reads). listWallets() does the authoritative gating/
+    // filtering, so we re-call it rather than trusting an event payload.
+    const unsubscribeWalletsChanged = client.on('wallets:changed', () => {
+      if (!mounted) return;
+      client
+        .listWallets()
+        .then((next) => {
+          if (mounted) setWallets(next);
+        })
+        .catch(() => {
+          /* transient discovery failure, keep the current list */
+        });
+    });
+
     return () => {
       mounted = false;
-      clearTimeout(rediscoverTimeout);
       unsubscribeConnect();
       unsubscribeDisconnect();
       unsubscribeExpired();
       unsubscribeError();
+      unsubscribeWalletsChanged();
     };
   }, [client]);
 
@@ -190,6 +218,7 @@ export function PartyLayerProvider({
         wallets,
         isLoading,
         error,
+        store,
       }}
     >
       {children}

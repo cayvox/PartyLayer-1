@@ -20,24 +20,31 @@ function createPartyLayer(config: PartyLayerConfig): PartyLayerClient
 ```typescript
 interface PartyLayerConfig {
   /** Target network */
-  network: 'devnet' | 'testnet' | 'mainnet';
+  network: NetworkId;
   /** Application info shown to wallets */
   app: {
     name: string;
     origin?: string; // defaults to window.location.origin
   };
-  /** Registry URL (default: https://registry.partylayer.xyz/v1/wallets.json) */
+  /** Registry URL (default: https://registry.partylayer.xyz) */
   registryUrl?: string;
   /** Registry channel (default: 'stable') */
   channel?: 'stable' | 'beta';
+  /** Network-mismatch enforcement policy (default: 'guard') */
+  networkEnforcement?: 'off' | 'guard' | 'strict';
   /** Custom storage adapter (default: localStorage) */
   storage?: StorageAdapter;
   /** Custom crypto adapter */
   crypto?: CryptoAdapter;
   /** Registry public keys for signature verification */
   registryPublicKeys?: string[];
-  /** Wallet adapters (default: all built-in — Console, Loop, Cantor8, Nightly) */
-  adapters?: (WalletAdapter | AdapterClass)[];
+  /** Wallet adapters (default: all built-in: Console, Loop, Cantor8, Nightly) */
+  adapters?: (WalletAdapter | AdapterClass | OfficialProviderAdapter | OfficialAdapterFactory)[];
+  /** Announce-based wallet discovery */
+  discovery?: {
+    announce?: boolean;        // default true in the browser
+    announceTimeoutMs?: number; // default ~300
+  };
   /** Telemetry configuration or custom adapter */
   telemetry?: TelemetryConfig | TelemetryAdapter;
   /** Custom logger */
@@ -73,7 +80,18 @@ connect(options?: ConnectOptions): Promise<Session>
 
 ```typescript
 interface ConnectOptions {
+  /** Specific wallet ID to connect to */
   walletId?: WalletId;
+  /** Prefer installed wallets */
+  preferInstalled?: boolean;
+  /** Allow only specific wallets */
+  allowWallets?: WalletId[];
+  /** Required capabilities */
+  requiredCapabilities?: string[];
+  /** Timeout in milliseconds */
+  timeoutMs?: number;
+  /** Called with a pairing/display URI (e.g. a WalletConnect wc: URI) before approval */
+  onDisplayUri?: (uri: string) => void;
 }
 ```
 
@@ -115,6 +133,14 @@ Submit a signed transaction.
 
 ```typescript
 submitTransaction(params: SubmitTransactionParams): Promise<TxReceipt>
+```
+
+#### ledgerApi
+
+Proxy a Canton JSON Ledger API call through the connected wallet. Requires the `ledgerApi` capability.
+
+```typescript
+ledgerApi(params: LedgerApiParams): Promise<LedgerApiResult>
 ```
 
 #### registerAdapter
@@ -159,11 +185,11 @@ destroy(): void
 | Event | Payload | Description |
 |-------|---------|-------------|
 | `session:connected` | `{ session: Session }` | Wallet connected successfully |
-| `session:disconnected` | `{}` | Wallet disconnected |
-| `session:expired` | `{}` | Session has expired |
-| `tx:status` | `{ txHash, status }` | Transaction status update |
+| `session:disconnected` | `{ sessionId: SessionId }` | Wallet disconnected |
+| `session:expired` | `{ sessionId: SessionId }` | Session has expired |
+| `tx:status` | `{ sessionId, txId, status, raw? }` | Transaction status update |
 | `registry:status` | `{ status: RegistryStatus }` | Registry status change |
-| `error` | `{ error: Error }` | Error occurred |
+| `error` | `{ error: PartyLayerError }` | Error occurred |
 
 ---
 
@@ -199,7 +225,7 @@ import { PartyLayerKit } from '@partylayer/react';
 
 ### ConnectButton
 
-RainbowKit-style connect button with wallet modal and connected state dropdown.
+Polished connect button with wallet modal and connected state dropdown.
 
 ```tsx
 import { ConnectButton } from '@partylayer/react';
@@ -264,11 +290,19 @@ function usePartyLayer(): PartyLayerClient
 
 ### useSession
 
-Get the current active session. Returns `null` when disconnected.
+Reactive session state + actions (re-renders on every session change). As of
+M1-S4 this returns `UseSessionReturn`, not the legacy SDK session getter.
 
 ```typescript
-function useSession(): Session | null
+function useSession(): UseSessionReturn
+// { status, account, accounts, networkId, lastError,
+//   isConnected, isConnecting, isReconnecting, isDisconnected,
+//   connect, disconnect, restore, on }
 ```
+
+> The legacy SDK session getter (`Session | null`) is preserved as the
+> deprecated `useClientSession(): Session | null`. Migrate
+> `useSession()` → `useClientSession()` if you need `{ sessionId, walletId, … }`.
 
 ### useWallets
 
@@ -464,15 +498,21 @@ interface TelemetryConfig {
 ### Core Types
 
 ```typescript
-type NetworkId = 'devnet' | 'testnet' | 'mainnet';
+type NetworkId = 'devnet' | 'testnet' | 'mainnet' | (string & {});
 type WalletId = string;
 type PartyId = string;
 
 interface Session {
-  sessionId: string;
+  sessionId: SessionId;
   walletId: WalletId;
   partyId: PartyId;
+  network: NetworkId;
+  createdAt: number;
   expiresAt?: number;
+  origin: string;
+  capabilitiesSnapshot: CapabilityKey[];
+  metadata?: Record<string, string>;
+  networkMismatch?: { expected: string; actual: string };
 }
 
 interface WalletInfo {

@@ -1,6 +1,6 @@
 {
   "name": "@partylayer/adapter-starter",
-  "version": "0.1.7",
+  "version": "0.1.15",
   "description": "Starter template for building PartyLayer wallet adapters",
   "type": "module",
   "main": "./dist/index.js",
@@ -19,7 +19,8 @@
   ],
   "scripts": {
     "build": "tsc && tsc --project tsconfig.esm.json",
-    "clean": "rm -rf dist",
+    "clean": "rm -rf dist *.tsbuildinfo",
+    "prepublishOnly": "pnpm run clean && pnpm run build",
     "lint": "eslint src --ext .ts",
     "typecheck": "tsc --noEmit"
   },
@@ -40,7 +41,7 @@
   },
   "license": "MIT",
   "dependencies": {
-    "@partylayer/core": "workspace:*"
+    "@partylayer/core": "workspace:^"
   },
   "devDependencies": {
     "@types/node": "^20.11.0",

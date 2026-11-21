@@ -32,7 +32,7 @@ By participating in this project, you agree to maintain a respectful and inclusi
 ### Prerequisites
 
 - **Node.js 18+** - [Download](https://nodejs.org/)
-- **pnpm 8+** - Install with `npm install -g pnpm`
+- **pnpm 9+** - Install with `npm install -g pnpm`
 - **Git** - [Download](https://git-scm.com/)
 
 ### Fork and Clone
@@ -60,6 +60,18 @@ git remote add upstream https://github.com/PartyLayer/PartyLayer.git
 ```bash
 pnpm install
 ```
+
+### Enable Git Hooks
+
+Point git at the repository's hooks directory so the `pre-commit` check runs
+before every commit. It blocks commits made with a local-hostname email like
+`user@MacBook-Pro.local`, which would leak machine names on public commits.
+
+```bash
+git config core.hooksPath .githooks
+```
+
+You only need to do this once per clone.
 
 ### Build All Packages
 

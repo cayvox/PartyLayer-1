@@ -1,0 +1,230 @@
+name: Nightly Assurance
+
+# ─────────────────────────────────────────────────────────────────────────────
+# WHY THIS EXISTS (institutional note)
+#
+# PR-time CI proves a CHANGE is green. It does NOT prove that `main` still builds
+# tomorrow (transitive-dependency drift, a yanked sub-dependency, a toolchain
+# bump) nor that the packages we PUBLISHED are coherent for real consumers
+# (validate:publish runs PRE-publish, against the workspace — it cannot see a
+# post-publish npm-resolution break, a missing `dist`, or a bad `exports` map).
+#
+# So this workflow runs nightly (and on demand) with three independent jobs:
+#   1. gate-main          — the full gate on a clean checkout of main (drift).
+#   2. npm-consumer-canary — install the PUBLISHED @partylayer/* from npm into a
+#                            CLEAN dir with NO workspace links, and tsc-compile a
+#                            smoke file against the surfaces users import. This is
+#                            the ONLY check that exercises exactly what `npm i`
+#                            gives a downstream user.
+#   3. session-persistence-e2e — a real-browser (Chromium) smoke of the
+#                            secure-by-default session: connect → encrypted
+#                            IndexedDB → reload-restore → multi-tab. Nightly +
+#                            on-demand only (NOT PR-gated — flakiness risk).
+#
+# Scope discipline: this does NOT touch examples.yml (monorepo build canary).
+# Distinct purpose, distinct file.
+# ─────────────────────────────────────────────────────────────────────────────
+
+on:
+  workflow_dispatch:
+  schedule:
+    # 03:17 UTC daily — off-peak, prime-ish minute to avoid the top-of-hour rush.
+    - cron: '17 3 * * *'
+
+jobs:
+  gate-main:
+    name: Gate (main, drift detection)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+      - name: Install (frozen)
+        run: pnpm install --frozen-lockfile
+      - name: Full gate
+        run: pnpm gate
+      - name: Summary
+        if: always()
+        run: |
+          echo "## Nightly — Gate (main)" >> $GITHUB_STEP_SUMMARY
+          echo "Status: ${{ job.status }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Runs the full \`pnpm gate\` against a clean checkout of \`main\`." >> $GITHUB_STEP_SUMMARY
+          echo "A failure here that did NOT fail on the last PR means environment or" >> $GITHUB_STEP_SUMMARY
+          echo "transitive-dependency drift — \`main\` no longer builds as-is." >> $GITHUB_STEP_SUMMARY
+
+  npm-consumer-canary:
+    name: npm consumer canary (published packages)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install published packages into a clean, link-free dir + tsc smoke
+        run: |
+          set -euo pipefail
+          DIR="$RUNNER_TEMP/pl-consumer-canary"
+          rm -rf "$DIR"; mkdir -p "$DIR"; cd "$DIR"
+          npm init -y >/dev/null
+
+          # The packages a real downstream user installs (latest published).
+          npm install --no-fund --no-audit \
+            @partylayer/sdk@latest \
+            @partylayer/react@latest \
+            @partylayer/provider@latest \
+            @partylayer/adapter-send@latest \
+            @partylayer/session@latest \
+            @partylayer/vue@latest \
+            @partylayer/testing@latest \
+            @tanstack/query-core@^5 \
+            typescript@^5
+
+          echo "Installed versions:"
+          for p in sdk react provider adapter-send session vue testing; do
+            # Read package.json via a direct filesystem path — `require('@partylayer/x/package.json')`
+            # is blocked by the packages' `exports` maps (ERR_PACKAGE_PATH_NOT_EXPORTED).
+            node -e "const fs=require('fs');const n=process.argv[1];const v=JSON.parse(fs.readFileSync('node_modules/@partylayer/'+n+'/package.json','utf8')).version;console.log('  @partylayer/'+n, v)" "$p"
+          done
+
+          # Smoke: type-check the key public surfaces against the PUBLISHED .d.ts.
+          # (skipLibCheck isolates the check to OUR usage, not deep dep types.)
+          cat > tsconfig.json <<'JSON'
+          {
+            "compilerOptions": {
+              "target": "es2022",
+              "module": "esnext",
+              "moduleResolution": "bundler",
+              "strict": true,
+              "noEmit": true,
+              "skipLibCheck": true,
+              "types": []
+            },
+            "files": ["smoke.ts"]
+          }
+          JSON
+
+          cat > smoke.ts <<'TS'
+          // Surfaces a downstream consumer imports. Compiles against PUBLISHED .d.ts.
+          import { createPartyLayer, GenericAnnounceAdapter } from '@partylayer/sdk';
+          // 1.0: encrypted-storage default + the session store, now PUBLISHED.
+          import { createSessionStore, createEncryptedIndexedDBStorage } from '@partylayer/session';
+          import { createProviderBridge } from '@partylayer/provider';
+          // React 0.7.0 reactive session hook + a component prop type.
+          import { useSession, type WalletModalProps } from '@partylayer/react';
+          import { SendAdapter } from '@partylayer/adapter-send';
+          // Vue 0.1.0 composables + provisioning.
+          import { useSession as useVueSession, useAccount as useVueAccount, provideSessionStore } from '@partylayer/vue';
+          // Testing 1.0 — BOTH entry points: main (session harness) + the /query subpath.
+          import { createSessionHarness } from '@partylayer/testing';
+          import { createTestQueryClient } from '@partylayer/testing/query';
+
+          export const _surfaces = [
+            createPartyLayer,
+            GenericAnnounceAdapter,
+            createSessionStore,
+            createEncryptedIndexedDBStorage,
+            createProviderBridge,
+            useSession,
+            SendAdapter,
+            useVueSession,
+            useVueAccount,
+            provideSessionStore,
+            createSessionHarness,
+            createTestQueryClient,
+          ] as const;
+          export type _ModalProps = WalletModalProps;
+          TS
+
+          npx tsc -p tsconfig.json
+          echo "✓ consumer smoke compiled against published @partylayer/* surfaces"
+      - name: Summary
+        if: always()
+        run: |
+          echo "## Nightly — npm consumer canary" >> $GITHUB_STEP_SUMMARY
+          echo "Status: ${{ job.status }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Installs the PUBLISHED \`@partylayer/*\` packages from npm into a clean" >> $GITHUB_STEP_SUMMARY
+          echo "dir (NO workspace links) and \`tsc\`-compiles a smoke importing the key" >> $GITHUB_STEP_SUMMARY
+          echo "public surfaces. A failure means published-package INCOHERENCE that" >> $GITHUB_STEP_SUMMARY
+          echo "\`validate:publish\` cannot see post-publish: a broken \`exports\` map," >> $GITHUB_STEP_SUMMARY
+          echo "a missing \`dist\`, an unresolvable dependency, or a .d.ts that no longer" >> $GITHUB_STEP_SUMMARY
+          echo "type-checks for downstream consumers." >> $GITHUB_STEP_SUMMARY
+
+  session-persistence-e2e:
+    name: Session persistence e2e (real browser)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+      - name: Install (frozen)
+        run: pnpm install --frozen-lockfile
+      - name: Build workspace packages
+        run: pnpm -r --filter "@partylayer/*" build
+      - name: Install Playwright Chromium
+        run: pnpm --filter partylayer-demo exec playwright install --with-deps chromium
+      - name: Session persistence smoke
+        run: pnpm --filter partylayer-demo exec playwright test session-persistence
+      - name: Summary
+        if: always()
+        run: |
+          echo "## Nightly — session persistence e2e" >> $GITHUB_STEP_SUMMARY
+          echo "Status: ${{ job.status }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Real-browser (Chromium) smoke of the 1.0 secure-by-default session:" >> $GITHUB_STEP_SUMMARY
+          echo "connect → encrypted IndexedDB persistence → page reload → restore →" >> $GITHUB_STEP_SUMMARY
+          echo "multi-tab. Uses @partylayer/testing browser primitives. Nightly +" >> $GITHUB_STEP_SUMMARY
+          echo "on-demand only — NOT PR-gated (real-browser flakiness risk)." >> $GITHUB_STEP_SUMMARY
+
+  mock-e2e:
+    name: Mock E2E + security (full demo suite)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+      - name: Install (frozen)
+        run: pnpm install --frozen-lockfile
+      - name: Build workspace packages
+        run: pnpm -r --filter "@partylayer/*" build
+      - name: Install Playwright Chromium
+        run: pnpm --filter partylayer-demo exec playwright install --with-deps chromium
+      - name: Full mock E2E + security suite
+        # The WHOLE demo e2e suite (mock fixture) — every transport, multi-tab,
+        # sign/bridge, theme, the 4 security tests. The per-PR gate runs only the
+        # fast/stable subset (smoke + connect + security via verify:e2e); this
+        # nightly job runs the rest so the broader coverage can't silently rot.
+        run: NEXT_PUBLIC_MOCK_WALLETS=1 pnpm --filter partylayer-demo exec playwright test
+      - name: Summary
+        if: always()
+        run: |
+          echo "## Nightly — mock E2E + security (full suite)" >> $GITHUB_STEP_SUMMARY
+          echo "Status: ${{ job.status }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "The full apps/demo mock-fixture e2e suite (NEXT_PUBLIC_MOCK_WALLETS=1):" >> $GITHUB_STEP_SUMMARY
+          echo "every transport (injected/announce/remote-signer/walletconnect)," >> $GITHUB_STEP_SUMMARY
+          echo "multi-tab, sign-and-bridge, theme, and the 4 security tests. The" >> $GITHUB_STEP_SUMMARY
+          echo "per-PR gate runs only the fast/stable subset (smoke + connect +" >> $GITHUB_STEP_SUMMARY
+          echo "security) — heavier/flakier specs are quarantined to nightly." >> $GITHUB_STEP_SUMMARY

@@ -61,6 +61,22 @@ export interface SessionExpiredEvent {
 }
 
 /**
+ * Network mismatch event — the connected wallet's effective network differs
+ * from the dApp's configured network. Emitted under ALL policies (informational);
+ * `enforced` is true when the active policy ('guard' | 'strict') will block.
+ */
+export interface SessionNetworkMismatchEvent {
+  type: 'session:networkMismatch';
+  sessionId: SessionId;
+  /** dApp-configured (expected) network, CAIP-2 normalized. */
+  expected: string;
+  /** Wallet-reported (actual) network, CAIP-2 normalized. */
+  actual: string;
+  /** Whether the active policy will block (guard|strict) vs. detect-only (off). */
+  enforced: boolean;
+}
+
+/**
  * Transaction status event
  */
 export interface TxStatusEvent {
@@ -80,6 +96,22 @@ export interface ErrorEvent {
 }
 
 /**
+ * Wallet-list changed event — the set of listable wallets changed since the last
+ * `listWallets()` (e.g. a wallet announced late via `canton:announceProvider`,
+ * after the picker already loaded). SIGNAL-ONLY: it carries no wallet payload
+ * because `listWallets()` does registry-merge + discovery-gating + identity-
+ * bridging + filtering that a raw announce doesn't reflect — the authoritative
+ * read is to re-call `listWallets()` (mirrors EIP-6963/mipd: store emits, UI
+ * re-reads). Emitted debounced (coalesces a burst into one). Never emitted when
+ * nothing announces (byte-identical idle).
+ */
+export interface WalletsChangedEvent {
+  type: 'wallets:changed';
+  /** Why the list changed. Currently only late/inject-time announce discovery. */
+  reason: 'announced';
+}
+
+/**
  * All event types
  */
 export type PartyLayerEvent =
@@ -88,7 +120,9 @@ export type PartyLayerEvent =
   | SessionConnectedEvent
   | SessionDisconnectedEvent
   | SessionExpiredEvent
+  | SessionNetworkMismatchEvent
   | TxStatusEvent
+  | WalletsChangedEvent
   | ErrorEvent;
 
 /**

@@ -16,7 +16,10 @@ import type {
   AdapterConnectResult,
   SignMessageParams,
   SignTransactionParams,
+  LedgerApiParams,
+  LedgerApiResult,
 } from '@partylayer/core';
+import { normalizeLedgerMethodUpper, ledgerApiBodyToString } from '@partylayer/core';
 import {
   toWalletId,
   toSignature,
@@ -93,10 +96,11 @@ export class BronAdapter implements WalletAdapter {
     return [
       'connect',
       'disconnect',
+      'restore',
       'remoteSigner',
       'signMessage',
       'signTransaction',
-      // restore depends on session persistence
+      'ledgerApi',
     ];
   }
 
@@ -160,6 +164,9 @@ export class BronAdapter implements WalletAdapter {
         partyId: session.partyId,
         session: {
           walletId: this.walletId,
+          // Bron's API session does not report the connected network → not
+          // wallet-reported, so network-mismatch detection is limited for this
+          // adapter (echoes the requested ctx.network).
           network: ctx.network,
           createdAt: Date.now(),
           expiresAt: session.expiresAt,
@@ -334,6 +341,46 @@ export class BronAdapter implements WalletAdapter {
       throw mapUnknownErrorToPartyLayerError(err, {
         walletId: this.walletId,
         phase: 'signTransaction',
+        transport: 'remote',
+      });
+    }
+  }
+
+  /**
+   * Proxy a Canton Ledger API request through the Bron enterprise API.
+   *
+   * Bron acts as an authenticated HTTP proxy — it forwards the request
+   * to the Canton Ledger API using the enterprise session credentials.
+   */
+  async ledgerApi(
+    ctx: AdapterContext,
+    session: import('@partylayer/core').Session,
+    params: LedgerApiParams,
+  ): Promise<LedgerApiResult> {
+    try {
+      const sessionId = session.metadata?.sessionId;
+      if (typeof sessionId !== 'string') {
+        throw new Error('No session ID');
+      }
+
+      ctx.logger.debug('Proxying ledger API request via Bron', {
+        sessionId,
+        requestMethod: params.requestMethod,
+        resource: params.resource,
+      });
+
+      const result = await this.apiClient.proxyLedgerApi({
+        requestMethod: normalizeLedgerMethodUpper(params.requestMethod),
+        resource: params.resource,
+        body: ledgerApiBodyToString(params.body),
+        sessionId,
+      });
+
+      return { response: result.response };
+    } catch (err) {
+      throw mapUnknownErrorToPartyLayerError(err, {
+        walletId: this.walletId,
+        phase: 'ledgerApi',
         transport: 'remote',
       });
     }

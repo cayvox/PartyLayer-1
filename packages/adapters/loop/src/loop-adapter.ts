@@ -19,6 +19,8 @@ import type {
   SignedMessage,
   SignedTransaction,
   TxReceipt,
+  LedgerApiParams,
+  LedgerApiResult,
   Session,
   PersistedSession,
   CapabilityKey,
@@ -32,6 +34,7 @@ import {
   WalletNotInstalledError,
   CapabilityNotSupportedError,
   mapUnknownErrorToPartyLayerError,
+  ledgerApiBodyToString,
 } from '@partylayer/core';
 import { loop } from '@fivenorth/loop-sdk';
 import type { LoopProvider } from '@fivenorth/loop-sdk';
@@ -56,8 +59,10 @@ export class LoopAdapter implements WalletAdapter {
     return [
       'connect',
       'disconnect',
+      'restore',
       'signMessage',
       'submitTransaction',
+      'ledgerApi',
       'events',
       'popup',
     ];
@@ -160,6 +165,9 @@ export class LoopAdapter implements WalletAdapter {
               partyId,
               session: {
                 walletId: this.walletId,
+                // Loop's connect callback does not report the connected network
+                // → not wallet-reported, so network-mismatch detection is
+                // limited for this adapter (echoes the requested ctx.network).
                 network: ctx.network,
                 createdAt: Date.now(),
               },
@@ -365,11 +373,31 @@ export class LoopAdapter implements WalletAdapter {
         },
       );
 
+      // Loop SDK resolves with whatever the wallet server sent back in
+      // the response payload. On success it's `{ command_id, submission_id }`,
+      // but empty or rejected responses can come through as undefined / {}.
+      // Guard before dereferencing so consumers don't see an opaque
+      // "Cannot read properties of undefined" or "Unexpected end of JSON
+      // input" — give them an actionable error instead.
+      const r = result as { command_id?: string; submission_id?: string } | null | undefined;
+      if (!r || typeof r.command_id !== 'string') {
+        // Do not use words like "rejected"/"denied"/"cancelled" here — the
+        // core error mapper auto-classifies those as UserRejectedError and
+        // replaces the message, which would hide the actionable hint below.
+        throw new Error(
+          `Loop Wallet submitTransaction returned an unexpected response shape. `
+          + `Expected { command_id, submission_id } but received ${safePreview(r)}. `
+          + `Likely the popup closed before confirmation or the wallet server returned an error payload. `
+          + `Ensure the Daml template ID uses the fully-qualified package-prefixed form `
+          + `(e.g. '#splice-amulet:Splice.Amulet:Amulet') — Loop does not accept the short Canton form.`,
+        );
+      }
+
       return {
-        transactionHash: toTransactionHash(result.command_id),
+        transactionHash: toTransactionHash(r.command_id),
         submittedAt: Date.now(),
-        commandId: result.command_id,
-        updateId: result.submission_id,
+        commandId: r.command_id,
+        updateId: r.submission_id ?? r.command_id,
       };
     } catch (err) {
       throw mapUnknownErrorToPartyLayerError(err, {
@@ -384,11 +412,367 @@ export class LoopAdapter implements WalletAdapter {
   }
 
   /**
-   * Map network ID to Loop SDK network format.
+   * Ledger API endpoints that Loop SDK can fulfill via native methods.
+   *
+   * Loop SDK does not expose a generic Ledger API proxy. Instead, it
+   * provides purpose-built methods (getActiveContracts, getHolding,
+   * submitTransaction, etc.) that we map to Canton Ledger API endpoints.
+   *
+   * Supported endpoints:
+   * - POST /v2/state/acs — via getActiveContracts()
+   * - POST /v2/state/active-contracts — alias for /v2/state/acs
+   * - GET  /v2/state/acs/active-contracts — unfiltered, via getActiveContracts()
+   * - POST /v2/commands/submit — via submitTransaction()
+   * - POST /v2/commands/submit-and-wait — via submitAndWaitForTransaction()
+   * - POST /v2/commands/submit-and-wait-for-transaction — alias
+   *
+   * Unsupported endpoints throw CapabilityNotSupportedError with a
+   * message listing the supported routes.
+   */
+  async ledgerApi(
+    ctx: AdapterContext,
+    session: Session,
+    params: LedgerApiParams,
+  ): Promise<LedgerApiResult> {
+    try {
+      if (!this.currentProvider) {
+        throw new Error('Not connected to Loop Wallet');
+      }
+
+      const { requestMethod, resource } = params;
+      // Loop's SDK handlers parse a JSON string body; the SDK boundary now also
+      // accepts an object, so coerce to the string form Loop expects.
+      const body = ledgerApiBodyToString(params.body);
+      const route = `${requestMethod.toUpperCase()} ${resource}`;
+
+      ctx.logger.debug('Loop ledgerApi request', {
+        sessionId: session.sessionId,
+        route,
+      });
+
+      // Route to the appropriate Loop SDK method
+      if (this.isAcsRoute(requestMethod, resource)) {
+        return this.handleAcsQuery(body);
+      }
+
+      if (this.isSubmitRoute(requestMethod, resource)) {
+        return this.handleSubmitCommand(resource, body);
+      }
+
+      // Unsupported endpoint
+      throw new CapabilityNotSupportedError(
+        this.walletId,
+        `ledgerApi endpoint "${route}" is not supported by Loop wallet. ` +
+          'Supported: POST /v2/state/acs, GET /v2/state/acs/active-contracts, ' +
+          'POST /v2/commands/submit, POST /v2/commands/submit-and-wait. ' +
+          'For full Ledger API access, use Console or Nightly wallet.',
+      );
+    } catch (err) {
+      throw mapUnknownErrorToPartyLayerError(err, {
+        walletId: this.walletId,
+        phase: 'ledgerApi',
+        transport: 'popup',
+        details: { sessionId: session.sessionId },
+      });
+    }
+  }
+
+  /** Check if the request targets the ACS query endpoint */
+  private isAcsRoute(method: string, resource: string): boolean {
+    const m = method.toUpperCase();
+    const normalized = resource.replace(/\/+$/, '');
+    // POST /v2/state/acs — filtered query (Canton Ledger API standard)
+    // POST /v2/state/active-contracts — alias
+    // GET  /v2/state/acs/active-contracts — unfiltered fetch of all contracts
+    if (m === 'POST') {
+      return normalized === '/v2/state/acs'
+        || normalized === '/v2/state/active-contracts';
+    }
+    if (m === 'GET') {
+      return normalized === '/v2/state/acs/active-contracts';
+    }
+    return false;
+  }
+
+  /** Check if the request targets a command submission endpoint */
+  private isSubmitRoute(method: string, resource: string): boolean {
+    if (method.toUpperCase() !== 'POST') return false;
+    const normalized = resource.replace(/\/+$/, '');
+    return normalized === '/v2/commands/submit'
+      || normalized === '/v2/commands/submit-and-wait'
+      || normalized === '/v2/commands/submit-and-wait-for-transaction';
+  }
+
+  /**
+   * Handle POST /v2/state/acs via Loop SDK's getActiveContracts().
+   *
+   * The Canton Ledger API ACS request body contains a filter with template IDs.
+   * We extract the first templateId from the filter and pass it to the Loop SDK.
+   * The response is wrapped to match the Canton Ledger API shape.
+   *
+   * Important: Loop SDK expects fully-qualified Daml template IDs that include
+   * the package name prefix (e.g., '#splice-amulet:Splice.Amulet:Amulet'),
+   * not the short Canton Ledger API format ('Splice.Amulet:Amulet').
+   */
+  private async handleAcsQuery(body?: string): Promise<LedgerApiResult> {
+    const provider = this.currentProvider!;
+
+    // Parse the request body to extract template filter
+    let templateId: string | undefined;
+    let interfaceId: string | undefined;
+
+    if (body) {
+      try {
+        const parsed = JSON.parse(body) as {
+          filter?: {
+            filtersByParty?: Record<string, {
+              inclusive?: {
+                templateFilters?: Array<{ templateId?: string; interfaceId?: string }>;
+              };
+            }>;
+          };
+          templateId?: string;
+          interfaceId?: string;
+        };
+
+        // Extract from Canton Ledger API filter format
+        if (parsed.filter?.filtersByParty) {
+          const partyFilters = Object.values(parsed.filter.filtersByParty);
+          for (const pf of partyFilters) {
+            const templates = pf.inclusive?.templateFilters;
+            if (templates && templates.length > 0) {
+              templateId = templates[0].templateId;
+              interfaceId = templates[0].interfaceId;
+              break;
+            }
+          }
+        }
+
+        // Also accept direct templateId/interfaceId (simplified format)
+        if (!templateId && parsed.templateId) {
+          templateId = parsed.templateId;
+        }
+        if (!interfaceId && parsed.interfaceId) {
+          interfaceId = parsed.interfaceId;
+        }
+      } catch {
+        // If body is not valid JSON, call without filters
+      }
+    }
+
+    // Call Loop SDK's getActiveContracts() with descriptive error context
+    let result: unknown;
+    try {
+      result = await provider.getActiveContracts({
+        templateId,
+        interfaceId,
+      });
+    } catch (err) {
+      const filterDesc = templateId
+        ? `templateId="${templateId}"`
+        : interfaceId
+          ? `interfaceId="${interfaceId}"`
+          : 'no filter (unfiltered query)';
+      const hint = !templateId && !interfaceId
+        ? ' Loop wallet may not support unfiltered ACS queries — try providing a templateId or interfaceId.'
+        : templateId && !templateId.startsWith('#')
+          ? ` Loop wallet expects fully-qualified Daml template IDs with a package name prefix`
+            + ` (e.g., '#splice-amulet:Splice.Amulet:Amulet'), not the short Canton format`
+            + ` ('Splice.Amulet:Amulet').`
+          : '';
+      throw new Error(
+        `Loop getActiveContracts() failed for ${filterDesc}.${hint}`
+        + ` Original error: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+
+    // Normalize the Loop SDK response — it may be a plain array or an
+    // object with a known contracts key.
+    const contracts = extractContracts(result);
+    const acsResponse = {
+      activeContracts: contracts,
+      workflowId: '',
+    };
+
+    return { response: JSON.stringify(acsResponse) };
+  }
+
+  /**
+   * Handle POST /v2/commands/submit[-and-wait] via Loop SDK's
+   * submitTransaction() or submitAndWaitForTransaction().
+   */
+  private async handleSubmitCommand(resource: string, body?: string): Promise<LedgerApiResult> {
+    const provider = this.currentProvider!;
+
+    // Validate body. Empty or whitespace-only body used to hit JSON.parse
+    // directly and produce "Unexpected end of JSON input" with no context.
+    if (!body || body.trim().length === 0) {
+      throw new Error(
+        `Command submission requires a request body with at least a 'commands' field. `
+        + `Example: { commands: [...], commandId, actAs, readAs }.`,
+      );
+    }
+
+    let payload: Record<string, unknown>;
+    try {
+      payload = JSON.parse(body) as Record<string, unknown>;
+    } catch (err) {
+      const preview = body.length > 120 ? body.slice(0, 120) + '...' : body;
+      throw new Error(
+        `Command submission body is not valid JSON: ${(err as Error).message}. `
+        + `Received body (first 120 chars): ${JSON.stringify(preview)}. `
+        + `Use JSON.stringify(payload) when calling ledgerApi.`,
+      );
+    }
+
+    const normalized = resource.replace(/\/+$/, '');
+    const waitForResult = normalized.includes('wait');
+
+    let result: unknown;
+    try {
+      result = waitForResult
+        ? await provider.submitAndWaitForTransaction(payload)
+        : await provider.submitTransaction(payload);
+    } catch (err) {
+      const message = (err as Error)?.message || 'Loop SDK submission failed without an error message';
+      const hint = this.templateIdHint(payload);
+      throw new Error(
+        `Loop Wallet ${waitForResult ? 'submitAndWaitForTransaction' : 'submitTransaction'} failed: ${message}.${hint} `
+        + `Original error preserved as cause.`,
+        { cause: err as Error },
+      );
+    }
+
+    // Loop resolves sendRequest with response.payload — which can be
+    // undefined / null when the wallet sends a malformed or empty
+    // TRANSACTION_COMPLETED frame. JSON.stringify(undefined) returns the
+    // VALUE undefined (not "undefined"), so a naive `response: JSON.stringify(result)`
+    // leaves the response key missing from the returned object. Downstream
+    // consumers then do JSON.parse(result.response) which blows up with
+    // "Unexpected token u" / "Unexpected end of JSON input". Normalize.
+    if (result === undefined || result === null) {
+      const hint = this.templateIdHint(payload);
+      // Avoid "rejected"/"denied"/"cancelled" here so the core error
+      // mapper doesn't classify this as UserRejectedError and drop the hint.
+      throw new Error(
+        `Loop Wallet ${waitForResult ? 'submitAndWaitForTransaction' : 'submitTransaction'} `
+        + `resolved with an empty response. The popup may have closed before confirmation, or the wallet server `
+        + `returned an unexpected frame.${hint}`,
+      );
+    }
+
+    return { response: JSON.stringify(result) };
+  }
+
+  /**
+   * Build a hint string if the developer passed a short-form Canton
+   * template ID OR used the legacy pre-Token-Standard Amulet_Transfer
+   * choice. Both patterns produce "Execute Unknown on Unknown" in Loop's
+   * UI because Canton moved transfers to CIP-56 TransferFactory in 2025/2026.
+   */
+  private templateIdHint(payload: Record<string, unknown>): string {
+    try {
+      const commands = payload.commands;
+      if (!Array.isArray(commands)) return '';
+      for (const cmd of commands as Array<Record<string, unknown>>) {
+        // v2 JSON Ledger API uses PascalCase ExerciseCommand; legacy shape used lowercase.
+        // Interface exercises still go through ExerciseCommand with the interfaceId
+        // in the templateId field — we don't need to distinguish, just inspect.
+        const exercise = ((cmd?.ExerciseCommand || cmd?.exerciseCommand || cmd?.exercise) as
+          | Record<string, unknown>
+          | undefined);
+        const create = ((cmd?.CreateCommand || cmd?.createCommand || cmd?.create) as
+          | Record<string, unknown>
+          | undefined);
+        const raw = (exercise?.templateId ?? create?.templateId) as string | undefined;
+        const choice = exercise?.choice as string | undefined;
+
+        // CIP-56 migration hint: Amulet_Transfer exercised directly on the
+        // Amulet template is the legacy path and is rejected by Canton today.
+        if (
+          choice === 'Amulet_Transfer'
+          && typeof raw === 'string'
+          && raw.includes('Splice.Amulet:Amulet')
+        ) {
+          return (
+            ` The command exercises 'Amulet_Transfer' directly on the Amulet template — that's the `
+            + `legacy (pre-CIP-56) path and Canton no longer accepts it, which is why Loop's UI shows `
+            + `"Execute Unknown on Unknown". Use the Token Standard flow: exercise `
+            + `'TransferFactory_Transfer' by interface on a TransferFactory contract `
+            + `(interfaceId '#splice-api-token-transfer-instruction-v1:Splice.Api.Token.TransferInstructionV1:TransferFactory'). `
+            + `See https://partylayer.xyz/docs/token-transfers for the canonical flow.`
+          );
+        }
+
+        if (typeof raw === 'string' && raw.length > 0 && !raw.startsWith('#')) {
+          return (
+            ` The command uses templateId="${raw}" which is the short Canton form; Loop requires `
+            + `the fully-qualified Daml form (e.g. '#splice-amulet:Splice.Amulet:Amulet').`
+          );
+        }
+      }
+    } catch {
+      // best-effort; never throw from a hint helper
+    }
+    return '';
+  }
+
+  /**
+   * Map a PartyLayer network ID to the Loop SDK network format.
+   *
+   * Loop serves only local / devnet / mainnet. Unsupported networks (e.g.
+   * testnet — Loop has none) throw a clear error at connect (via the adapter's
+   * existing error path) instead of being silently substituted to the wrong
+   * network.
    */
   private mapNetworkToLoop(network: string): 'local' | 'devnet' | 'mainnet' {
     if (network === 'local') return 'local';
-    if (network === 'devnet' || network === 'testnet') return 'devnet';
-    return 'mainnet';
+    if (network === 'devnet') return 'devnet';
+    if (network === 'mainnet') return 'mainnet';
+    throw new Error(
+      `Loop wallet does not support the "${network}" network (supported: local, devnet, mainnet).`,
+    );
   }
+}
+
+/**
+ * Extract a contracts array from the Loop SDK response.
+ *
+ * The SDK's getActiveContracts() may return:
+ *   - A plain array of contract objects (most common)
+ *   - An object with a known key containing the array
+ *
+ * This helper normalizes all shapes to a flat array.
+ */
+/**
+ * Format an unknown value into a short human-readable preview for
+ * inclusion in error messages. Keeps output small so long payloads
+ * don't flood the console.
+ */
+function safePreview(value: unknown): string {
+  if (value === undefined) return 'undefined';
+  if (value === null) return 'null';
+  try {
+    const s = JSON.stringify(value);
+    if (typeof s !== 'string') return String(value);
+    return s.length > 200 ? s.slice(0, 200) + '...' : s;
+  } catch {
+    return String(value);
+  }
+}
+
+function extractContracts(result: unknown): unknown[] {
+  if (Array.isArray(result)) {
+    return result;
+  }
+  if (result && typeof result === 'object') {
+    const obj = result as Record<string, unknown>;
+    // Try common response wrapper keys
+    for (const key of ['active_contracts', 'activeContracts', 'contracts', 'result']) {
+      if (Array.isArray(obj[key])) {
+        return obj[key] as unknown[];
+      }
+    }
+  }
+  return [];
 }

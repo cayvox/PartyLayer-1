@@ -21,17 +21,34 @@ import type {
   TxReceipt,
   WalletAdapter,
   AdapterContext,
+  NetworkId,
 } from '@partylayer/core';
 import {
   toSessionId,
+  toWalletId,
   WalletNotFoundError,
+  AdapterNotRegisteredError,
   CapabilityNotSupportedError,
+  NetworkMismatchError,
+  detectNetworkMismatch,
   mapUnknownErrorToPartyLayerError,
   capabilityGuard,
   installGuard,
+  isOfficialProviderAdapter,
+  isOfficialAdapterFactory,
 } from '@partylayer/core';
 import { RegistryClient } from '@partylayer/registry-client';
 import type { RegistryStatus } from '@partylayer/registry-client';
+import {
+  createProviderBridge,
+  createExtensionChannelProvider,
+  discoverProviders,
+  subscribeAnnouncedProviders,
+  type DiscoveredProvider,
+} from '@partylayer/provider';
+import { findMatchingWalletInfo } from '@partylayer/core';
+import { GenericAnnounceAdapter, type AnnounceAdapterConfig } from './announce-adapter';
+import { GenericDiscoveryAdapter } from './discovery-adapter';
 import {
   DEFAULT_REGISTRY_URL,
   type PartyLayerConfig,
@@ -60,20 +77,105 @@ import type {
 } from '@partylayer/core';
 
 /**
+ * Storage key used for the active session.
+ *
+ * SDK tracks a single active session at a time, so persist/restore/remove
+ * all target the same key. Prior to this fix, persist wrote to
+ * `session_<sessionId>` while restore read from `active_session`, which
+ * meant sessions never survived a page reload.
+ */
+const SESSION_STORAGE_KEY = 'active_session';
+
+// Debounce window for the `wallets:changed` emit. Real extension injects land
+// across a few ticks (a microtask only coalesces same-tick), so a short timer
+// collapses a near-simultaneous burst — and the construction-time announce reply
+// storm — into ONE emit, bounding the consumer's re-list (and its discovery
+// handshake) to once per burst.
+const WALLETS_CHANGED_DEBOUNCE_MS = 50;
+
+/**
+ * Map a registry announce entry (`adapter.transport: 'announce'`) to the
+ * GenericAnnounceAdapter opt-in config: `events` from the entry's capabilities,
+ * the rest from its free-form `adapter.config`. (The programmatic `mapError`
+ * hook is supplied at construction — JSON registry data can't carry a function.)
+ */
+function deriveAnnounceConfig(entry: {
+  capabilities?: { events?: boolean };
+  adapter?: { config?: Record<string, unknown> };
+}): AnnounceAdapterConfig {
+  const cfg = entry.adapter?.config ?? {};
+  const config: AnnounceAdapterConfig = {
+    events: entry.capabilities?.events === true,
+    restore: cfg.restore === true,
+    ledgerApi: cfg.ledgerApi === true,
+    metadata: cfg.metadata === true,
+    signMessageBase64: cfg.signMessageBase64 === true,
+  };
+  // staticMetadata: declarative string→string only (JSON-safe, unlike mapError
+  // which is a function and is correctly omitted). Non-string values are dropped.
+  const sm = cfg.staticMetadata;
+  if (sm && typeof sm === 'object') {
+    const out: Record<string, string> = {};
+    for (const [k, v] of Object.entries(sm as Record<string, unknown>)) {
+      if (typeof v === 'string') out[k] = v;
+    }
+    if (Object.keys(out).length > 0) config.staticMetadata = out;
+  }
+  return config;
+}
+
+/**
+ * Pre-resolved inputs for `adapter.connect()`, produced by `resolveConnectPlan`.
+ * When pre-warmed (see `warmPlans`), the popup-safe fast-path can reach
+ * `adapter.connect()` with ZERO awaits so a popup/remote wallet's `window.open`
+ * survives the user gesture (no Safari popup-block).
+ */
+interface ConnectPlan {
+  selectedWallet: WalletInfo;
+  adapter: WalletAdapter;
+  ctx: AdapterContext;
+  isNativeWallet: boolean;
+}
+
+/**
  * PartyLayer Client
- * 
+ *
  * Main client interface for dApps to interact with Canton wallets.
  */
 export class PartyLayerClient {
   private config: PartyLayerConfig;
   private adapters = new Map<WalletId, WalletAdapter>();
+  /**
+   * Pre-resolved connect plans for popup/remote (GenericDiscoveryAdapter)
+   * wallets, warmed on `listWallets()` (which the modal calls on open) so a
+   * subsequent click can connect gesture-synchronously. Consumed (deleted) on
+   * use and cleared on disconnect; a cold miss falls back to the normal path.
+   */
+  private readonly warmPlans = new Map<WalletId, ConnectPlan>();
   private eventHandlers = new Map<string, Set<EventHandler>>();
   private activeSession: Session | null = null;
+  /**
+   * True when `activeSession` was revived AS-IS (no live `status()` probe) because
+   * its adapter wasn't registered yet at restore time (the lazy configured-announce
+   * case). Cleared once a live probe validates it (or on fresh connect). When set,
+   * `aggregateAnnouncedWallets` re-probes the session the moment that adapter is born.
+   */
+  private activeSessionNeedsProbe = false;
   public readonly registryClient: RegistryClient; // Expose for React hooks
   private logger: import('@partylayer/core').LoggerAdapter;
   private crypto: import('@partylayer/core').CryptoAdapter;
   private storage: import('@partylayer/core').StorageAdapter;
   private telemetry?: import('@partylayer/core').TelemetryAdapter;
+  /** Cached announce-discovery picker entries (one-shot; cleared by refreshDiscovery). */
+  private announceEntriesCache: WalletInfo[] | null = null;
+  // Persistent announce accumulator (option 1): one window subscription mounted
+  // at construction so LATE / inject-time `canton:announceProvider` replies are
+  // captured (not just a one-shot window). Read by aggregateAnnouncedWallets;
+  // torn down in destroy(). Empty → listWallets() output is byte-identical.
+  private readonly announceRegistry = new Map<string, DiscoveredProvider>();
+  private announceUnsubscribe: (() => void) | null = null;
+  /** Pending debounced `wallets:changed` emit (coalesces an announce burst). */
+  private walletsChangedTimer: ReturnType<typeof setTimeout> | null = null;
   private origin: string;
 
   constructor(config: PartyLayerConfig) {
@@ -104,12 +206,28 @@ export class PartyLayerClient {
     for (const adapterOrClass of adaptersToRegister) {
       let adapter: import('@partylayer/core').WalletAdapter;
       
-      // Check if it's a class (function) or instance (object)
+      // Check if it's a class (function), an official ProviderAdapter, or a
+      // WalletAdapter instance.
       if (typeof adapterOrClass === 'function') {
         // It's a class - instantiate it
         adapter = new (adapterOrClass as new () => import('@partylayer/core').WalletAdapter)();
+      } else if (isOfficialAdapterFactory(adapterOrClass)) {
+        // Generic bridge, FACTORY form: the app supplies `create(host)` instead
+        // of a pre-built instance, so the bridge constructs the official adapter
+        // with a host resolved from the registry's `adapter.networkHosts` for
+        // the active network (no wallet URL in app/SDK code). networkHosts is
+        // injected during the warm phase (see resolveConnectPlan). Checked
+        // before the instance form: a factory has `create` (no `provider`).
+        adapter = new GenericDiscoveryAdapter({ factory: adapterOrClass });
+      } else if (isOfficialProviderAdapter(adapterOrClass)) {
+        // Generic bridge, INSTANCE form: an app-supplied official @canton-network
+        // core-wallet-discovery ProviderAdapter (e.g. `new WalleyAdapter()`).
+        // Wrapped into our WalletAdapter contract with NO wallet-specific
+        // package. Disjoint from WalletAdapter (which has no providerId/detect/
+        // provider), so this never misclassifies an existing adapter.
+        adapter = new GenericDiscoveryAdapter({ official: adapterOrClass });
       } else {
-        // It's already an instance
+        // It's already a WalletAdapter instance
         adapter = adapterOrClass;
       }
       
@@ -132,6 +250,16 @@ export class PartyLayerClient {
     // Emit initial registry status
     this.updateRegistryStatus();
 
+    // Mount the persistent announce accumulator (no-op under SSR; the subscribe
+    // primitive guards on `window`). Captures announces that arrive at any time
+    // since construction — including late/slow extension injection.
+    if (this.announceEnabled) {
+      this.announceUnsubscribe = subscribeAnnouncedProviders(
+        (p) => this.onAnnounceAccumulated(p),
+        { createProvider: (a) => createExtensionChannelProvider({ target: a.target ?? a.id }) },
+      );
+    }
+
     // Restore session on init
     this.restoreSession().catch((err) => {
       this.emit('error', {
@@ -145,13 +273,32 @@ export class PartyLayerClient {
 
   /**
    * Register a wallet adapter
-   * 
+   *
    * @internal
    * This is used internally by the SDK to register adapters.
    * In production, adapters would be auto-registered via registry.
    */
   registerAdapter(adapter: WalletAdapter): void {
     this.adapters.set(adapter.walletId, adapter);
+  }
+
+  /**
+   * Look up a registered adapter by wallet id.
+   *
+   * Returns the adapter instance when one is registered for the given
+   * `walletId`, or `undefined` otherwise. Intended for UI integrations
+   * that need to call `adapter.detectInstalled()` directly to render a
+   * per-wallet readiness indicator (instead of duplicating
+   * transport-specific install detection logic in the picker). The
+   * returned adapter is the same instance used internally for connect /
+   * sign / submit flows; do not mutate it.
+   *
+   * Accepts both raw string ids and the branded `WalletId` form so
+   * consumers can pass `walletInfo.walletId` or a string literal
+   * interchangeably.
+   */
+  getAdapter(walletId: string | WalletId): WalletAdapter | undefined {
+    return this.adapters.get(walletId as WalletId);
   }
 
   /**
@@ -196,6 +343,26 @@ export class PartyLayerClient {
       } as WalletInfo);
     }
 
+    // Registry-visibility gating for `discovery-adapter` (popup/remote) entries.
+    // Such a wallet's provider is supplied by the APP (an official
+    // ProviderAdapter the SDK auto-bridges) — it CANNOT work unless that adapter
+    // is registered. So a `discovery-adapter` registry entry must surface ONLY
+    // when the matching adapter is registered; otherwise consumers who didn't
+    // wire it would see the wallet and get a broken click (no adapter → connect
+    // throws WalletNotFoundError). Hide unregistered discovery entries.
+    registryWallets = await this.gateDiscoveryAdapterEntries(registryWallets);
+
+    // A2: aggregate canton:announceProvider wallets (announce ∪ namespace scan),
+    // bridging known ids to existing entries and surfacing unknown ids as
+    // dynamic, target-scoped entries. No-op (byte-identical) with zero announcers.
+    registryWallets = await this.aggregateAnnouncedWallets(registryWallets);
+
+    // Popup-safe warm-up: pre-resolve connect plans for popup/remote
+    // (GenericDiscoveryAdapter) wallets in the background so a later click can
+    // reach adapter.connect() gesture-synchronously. Fire-and-forget; never
+    // blocks listing. No-op when there are no such adapters (e.g. today).
+    void this.warmDiscoveryPlans(registryWallets);
+
     // Filter by capabilities
     if (filter?.requiredCapabilities) {
       return registryWallets.filter((walletInfo) =>
@@ -214,151 +381,290 @@ export class PartyLayerClient {
   }
 
   /**
+   * Hide `transport: 'discovery-adapter'` registry entries whose matching
+   * adapter is NOT registered. A discovery-adapter wallet's provider is supplied
+   * by the app (an official ProviderAdapter the SDK bridges under
+   * `toWalletId(providerId)`); without it, clicking the entry can only fail. So
+   * the entry surfaces only when its adapter is present. No-op when the registry
+   * is unavailable (list is already adapters-only) or has no such entries.
+   */
+  private async gateDiscoveryAdapterEntries(wallets: WalletInfo[]): Promise<WalletInfo[]> {
+    let hidden: Set<string> | null = null;
+    try {
+      const registry = await this.registryClient.getRegistry();
+      for (const entry of registry.wallets) {
+        if (entry.adapter?.transport !== 'discovery-adapter') continue;
+        const walletId = toWalletId(entry.id);
+        if (!this.adapters.has(walletId)) {
+          (hidden ??= new Set<string>()).add(String(walletId));
+        }
+      }
+    } catch {
+      // Registry unavailable — nothing registry-sourced to gate.
+      return wallets;
+    }
+    if (!hidden || hidden.size === 0) return wallets;
+    return wallets.filter((w) => !hidden!.has(String(w.walletId)));
+  }
+
+  /**
+   * If `walletId` maps to a registry entry with `transport: 'discovery-adapter'`,
+   * return the bits to build an actionable "register its adapter" error; else
+   * null (truly-unknown or non-discovery → plain WalletNotFoundError). Reads the
+   * UNGATED registry (SWR-cached); registry-unavailable → null (safe fallback).
+   */
+  private async unregisteredDiscoveryInfo(
+    walletId: WalletId
+  ): Promise<{ name?: string; providerId?: string; adapterPackage?: string } | null> {
+    try {
+      const registry = await this.registryClient.getRegistry();
+      const entry = registry.wallets.find((w) => toWalletId(w.id) === walletId);
+      if (entry?.adapter?.transport !== 'discovery-adapter') return null;
+      const pid = entry.adapter?.config?.providerId;
+      return {
+        name: entry.name,
+        providerId: typeof pid === 'string' ? pid : entry.id,
+        adapterPackage: typeof entry.adapter?.type === 'string' ? entry.adapter.type : undefined,
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Whether announce discovery is active: explicit `discovery.announce`, else
+   * ON in the browser and OFF under SSR (no `window`). Canonical: provider.md.
+   */
+  private get announceEnabled(): boolean {
+    if (typeof window === 'undefined') return false;
+    return this.config.discovery?.announce ?? true;
+  }
+
+  /**
+   * Clear the cached announce round-trip so the next `listWallets()` re-runs the
+   * `canton:requestProvider` handshake (e.g. after a wallet is installed).
+   */
+  refreshDiscovery(): void {
+    this.announceEntriesCache = null;
+  }
+
+  /**
+   * Persistent-accumulator callback (mounted at construction). On each newly
+   * announced provider:
+   *   1. record it in the live `announceRegistry` (unchanged);
+   *   2. invalidate the one-shot `announceEntriesCache` — the SAME invalidation
+   *      as {@link refreshDiscovery}, so the next `listWallets()` re-aggregates
+   *      and surfaces the wallet. This does NOT touch `warmPlans` (those hold
+   *      only GenericDiscoveryAdapter popup plans — a disjoint set);
+   *   3. emit a DEBOUNCED `wallets:changed` signal so a reactive consumer (e.g.
+   *      the React provider) re-lists. The debounce coalesces a burst — and the
+   *      construction-time reply storm — into one emit (no re-discovery storm).
+   *
+   * Byte-identical idle: with zero announces this never fires — no invalidation,
+   * no emit, no re-list.
+   */
+  private onAnnounceAccumulated(p: DiscoveredProvider): void {
+    this.announceRegistry.set(p.id, p);
+    this.announceEntriesCache = null;
+    // Leading-scheduled, trailing-fire debounce: the first announce of a burst
+    // arms a single timer; further announces within the window are coalesced
+    // (cache already invalidated each time) and do not reschedule it.
+    if (this.walletsChangedTimer !== null) return;
+    this.walletsChangedTimer = setTimeout(() => {
+      this.walletsChangedTimer = null;
+      this.emit('wallets:changed', { type: 'wallets:changed', reason: 'announced' });
+    }, WALLETS_CHANGED_DEBOUNCE_MS);
+  }
+
+  /**
+   * Aggregate `canton:announceProvider` wallets into the picker list (A2).
+   *
+   * One-shot cached per client (refresh via {@link refreshDiscovery}); SSR-skipped.
+   * For each discovered provider (announce ∪ `window.canton` scan, deduped):
+   *   - if its id matches a known wallet's `providerDetection` (provider.id) it
+   *     IS that wallet — no new entry (identity bridge: Console's `lpnf…` → the
+   *     `console` entry, Send's `ldmo…` → the `send` entry);
+   *   - otherwise it is surfaced as a dynamic `browser:ext:<id>` entry routed to
+   *     its own extension `target`, with a {@link GenericAnnounceAdapter}
+   *     registered so a click connects through that target ONLY (no shared slot).
+   * With zero announcers this returns `base` unchanged.
+   */
+  private async aggregateAnnouncedWallets(base: WalletInfo[]): Promise<WalletInfo[]> {
+    if (!this.announceEnabled) return base;
+
+    if (this.announceEntriesCache === null) {
+      try {
+        const snapshot = await discoverProviders({
+          timeoutMs: this.config.discovery?.announceTimeoutMs,
+          // Working provider over the announce target channel; G4 (provider.md):
+          // target defaults to id when omitted — never a shared slot.
+          createProvider: (a) =>
+            createExtensionChannelProvider({ target: a.target ?? a.id }),
+        });
+        // Merge the persistent accumulator (late/inject-time announces), deduped
+        // by id; the fresh snapshot takes precedence. Empty registry → identical.
+        const byId = new Map<string, DiscoveredProvider>();
+        for (const d of snapshot) byId.set(d.id, d);
+        for (const d of this.announceRegistry.values())
+          if (!byId.has(d.id)) byId.set(d.id, d);
+        const discovered = [...byId.values()];
+
+        const entries: WalletInfo[] = [];
+        for (const d of discovered) {
+          // A2.1: an injected entry whose IDENTITY is UNRESOLVED (it fell back
+          // to the discovery-path id, e.g. an identity-less bare `window.canton`
+          // slot) must NEVER synthesize a picker entry — that produced the live
+          // phantom "Canton Wallet" (browser:ext:canton) whose provider was the
+          // slot itself (clicking it opened Console). A resolvable/announced
+          // wallet represents that slot instead. Correctness is independent of
+          // the status() probe timing.
+          if (d.identityResolved === false) continue;
+          // Identity bridge: does a known wallet claim this provider id?
+          const known = findMatchingWalletInfo(
+            { provider: { id: d.id } } as unknown as Parameters<
+              typeof findMatchingWalletInfo
+            >[0],
+            base,
+          );
+          if (known) {
+            // A bespoke/registered adapter already represents this wallet (e.g.
+            // Send) → unchanged: its existing entry + adapter serve it.
+            if (this.adapters.has(known.walletId)) continue;
+            // Opt-in (additive): a registry announce wallet (`transport: 'announce'`)
+            // with NO registered adapter is served by a CONFIGURED generic announce
+            // adapter, registered under its REGISTRY walletId so its picker entry
+            // resolves. Keyed STRICTLY on transport==='announce' — discovery-adapter
+            // entries are gated separately and never reach here.
+            try {
+              const entry = await this.registryClient.getWalletEntry(String(known.walletId));
+              if (entry?.adapter?.transport === 'announce') {
+                const configured = new GenericAnnounceAdapter({
+                  announceId: d.id,
+                  walletId: known.walletId,
+                  name: d.name ?? known.name,
+                  icon: d.icon,
+                  provider: d.provider,
+                  config: deriveAnnounceConfig(entry),
+                });
+                this.adapters.set(configured.walletId, configured);
+                // Restore hardening: if the active session was revived AS-IS (no
+                // live probe, because this adapter didn't exist at restore time),
+                // re-validate it NOW via the adapter's status() probe — matching
+                // bespoke's ctor-time probe. Fires only for the matching wallet,
+                // exactly once (flag cleared); guarded so it can't break listing.
+                const active = this.activeSession;
+                if (active && this.activeSessionNeedsProbe && active.walletId === configured.walletId && configured.restore) {
+                  try {
+                    const reprobed = await configured.restore(this.createAdapterContext(), {
+                      ...active,
+                      encrypted: '',
+                    });
+                    if (reprobed) {
+                      this.activeSession = reprobed;
+                      this.activeSessionNeedsProbe = false;
+                      await this.persistSession(reprobed);
+                      this.emit('session:connected', { type: 'session:connected', session: reprobed });
+                    } else {
+                      // Wallet disconnected between reloads — clear the stale as-is session.
+                      await this.removeSession(active.sessionId);
+                      this.activeSession = null;
+                      this.activeSessionNeedsProbe = false;
+                      this.emit('session:expired', { type: 'session:expired', sessionId: active.sessionId });
+                    }
+                  } catch (err) {
+                    // Re-probe failed — leave the session as-is; never break listWallets.
+                    this.logger.warn('Restore re-probe failed; leaving session as-is', err);
+                  }
+                }
+              }
+            } catch {
+              // Registry lookup failed — leave as-is (the base entry still lists it).
+            }
+            continue; // known wallet → existing entry; no dynamic dup entry
+          }
+
+          // Unknown announced wallet → dynamic, target-scoped entry + adapter.
+          const adapter = new GenericAnnounceAdapter({
+            announceId: d.id,
+            name: d.name,
+            icon: d.icon,
+            provider: d.provider,
+          });
+          this.adapters.set(adapter.walletId, adapter);
+          entries.push({
+            walletId: adapter.walletId,
+            name: adapter.name,
+            website: '',
+            icons: d.icon ? { sm: d.icon, md: d.icon, lg: d.icon } : {},
+            capabilities: adapter.getCapabilities(),
+            adapter: { packageName: 'announced', versionRange: '*' },
+            docs: [],
+            networks: [this.config.network || 'devnet'],
+            channel: 'stable',
+          } as WalletInfo);
+        }
+        this.announceEntriesCache = entries;
+      } catch {
+        // Discovery failure must never block listing the registry/adapters.
+        this.announceEntriesCache = [];
+      }
+    }
+
+    if (this.announceEntriesCache.length === 0) return base;
+    const ids = new Set(base.map((w) => String(w.walletId)));
+    return [
+      ...base,
+      ...this.announceEntriesCache.filter((w) => !ids.has(String(w.walletId))),
+    ];
+  }
+
+  /** Active network-enforcement policy (default 'guard'). */
+  private get enforcement(): 'off' | 'guard' | 'strict' {
+    return this.config.networkEnforcement ?? 'guard';
+  }
+
+  /**
+   * Detect a confident network mismatch between the dApp's configured network
+   * and the session's (wallet-reported) network. Returns null when they match
+   * or the comparison isn't confident (conservative — never a false positive).
+   */
+  private networkMismatch(session: Session): { expected: string; actual: string } | null {
+    return detectNetworkMismatch(this.config.network, session.network);
+  }
+
+  /**
+   * Guard a transaction-class operation: throw `NetworkMismatchError` when the
+   * session is on the wrong network AND the policy enforces it ('guard' |
+   * 'strict'). Also protects restored sessions and mid-session network switches.
+   */
+  private assertNetworkOk(session: Session): void {
+    const mm = this.networkMismatch(session);
+    if (mm && this.enforcement !== 'off') {
+      throw new NetworkMismatchError(mm.expected, mm.actual);
+    }
+  }
+
+  /**
    * Connect to a wallet
    */
   async connect(options?: ConnectOptions): Promise<Session> {
     // Track connect attempt
     this.telemetry?.increment?.(METRICS.WALLET_CONNECT_ATTEMPTS);
-    
+
     try {
-      // Get available wallets
-      const wallets = await this.listWallets({
-        requiredCapabilities: options?.requiredCapabilities,
-        includeExperimental: true,
-      });
+      // Popup-safe fast-path: a pre-warmed plan for a popup/remote
+      // (GenericDiscoveryAdapter) wallet lets us reach adapter.connect() with
+      // ZERO awaits, so the wallet's window.open survives the user gesture.
+      // `tryFastConnect` is SYNCHRONOUS — when it returns a promise,
+      // completeConnect has already invoked adapter.connect() in this call stack.
+      const fast = this.tryFastConnect(options);
+      if (fast) return await fast;
 
-      // Filter by allowWallets
-      let availableWallets = wallets;
-      if (options?.allowWallets) {
-        availableWallets = wallets.filter((w) =>
-          options.allowWallets!.includes(w.walletId)
-        );
-      }
-
-      // Select wallet
-      let selectedWallet: WalletInfo;
-      let isNativeWallet = false;
-      if (options?.walletId) {
-        const found = availableWallets.find(
-          (w) => w.walletId === options.walletId
-        );
-        if (found) {
-          selectedWallet = found;
-        } else {
-          // Fallback: check if a native CIP-0103 adapter is registered
-          const nativeAdapter = this.adapters.get(options.walletId);
-          if (nativeAdapter) {
-            isNativeWallet = true;
-            selectedWallet = {
-              walletId: options.walletId,
-              name: nativeAdapter.name,
-              website: '',
-              icons: {},
-              capabilities: nativeAdapter.getCapabilities(),
-              adapter: { packageName: 'native-cip0103', versionRange: '*' },
-              docs: [],
-              networks: [this.config.network],
-              channel: 'stable' as const,
-              metadata: { source: 'native-cip0103' },
-            };
-          } else {
-            throw new WalletNotFoundError(String(options.walletId));
-          }
-        }
-      } else if (availableWallets.length === 0) {
-        throw new WalletNotFoundError('No wallets available');
-      } else {
-        selectedWallet = availableWallets[0];
-      }
-
-      // Get adapter
-      const adapter = this.adapters.get(selectedWallet.walletId);
-      if (!adapter) {
-        throw new WalletNotFoundError(String(selectedWallet.walletId));
-      }
-
-      // Check origin allowlist (skip for native CIP-0103 wallets and
-      // adapter-merged wallets that aren't in the registry)
-      if (!isNativeWallet) {
-        try {
-          const walletEntry = await this.registryClient.getWalletEntry(String(selectedWallet.walletId));
-          if (walletEntry.originAllowlist && walletEntry.originAllowlist.length > 0) {
-            if (!walletEntry.originAllowlist.includes(this.origin)) {
-              const { OriginNotAllowedError } = await import('@partylayer/core');
-              throw new OriginNotAllowedError(
-                this.origin,
-                walletEntry.originAllowlist
-              );
-            }
-          }
-        } catch (e) {
-          // Wallet not in registry (adapter-merged) — skip origin check
-          if (!(e instanceof WalletNotFoundError)) {
-            throw e;
-          }
-        }
-      }
-
-      // Check capabilities
-      if (options?.requiredCapabilities) {
-        capabilityGuard(adapter, options.requiredCapabilities as CapabilityKey[]);
-      }
-
-      // Check installation
-      await installGuard(adapter);
-
-      // Create adapter context
-      const ctx = this.createAdapterContext();
-
-      // Connect
-      // Default timeout: 2 minutes for QR code/popup based wallets
-      const timeoutMs = options?.timeoutMs || 120000;
-      const connectPromise = adapter.connect(ctx, {
-        timeoutMs,
-        partyId: undefined, // TODO: support party selection
-      });
-
-      const timeoutPromise = new Promise<never>((_, reject) => {
-        setTimeout(() => {
-          reject(new Error(`Connection timed out after ${timeoutMs}ms - user did not complete wallet connection`));
-        }, timeoutMs);
-      });
-
-      const result = await Promise.race([connectPromise, timeoutPromise]);
-
-      // Create session
-      const session: Session = {
-        sessionId: toSessionId(`session_${Date.now()}_${Math.random().toString(36).substring(2, 15)}`),
-        walletId: selectedWallet.walletId,
-        partyId: result.partyId,
-        network: this.config.network,
-        createdAt: Date.now(),
-        expiresAt: result.session.expiresAt,
-        origin: this.origin,
-        capabilitiesSnapshot: result.capabilities,
-        metadata: result.session.metadata as Record<string, string> | undefined,
-      };
-
-      // Persist session
-      await this.persistSession(session);
-
-      // Set active session
-      this.activeSession = session;
-
-      // Update registry status (may have changed during fetch)
-      this.updateRegistryStatus();
-
-      // Track successful connection
-      this.telemetry?.increment?.(METRICS.WALLET_CONNECT_SUCCESS);
-      this.telemetry?.increment?.(METRICS.SESSIONS_CREATED);
-
-      // Emit event
-      this.emit('session:connected', {
-        type: 'session:connected',
-        session,
-      });
-
-      return session;
+      // Normal path (every existing wallet — injected/announce — comes here):
+      // resolve the plan (the awaited guards) then connect. Behavior-identical
+      // to the pre-fast-path connect.
+      const plan = await this.resolveConnectPlan(options);
+      return await this.completeConnect(plan, options);
     } catch (err) {
       const timeoutMs = options?.timeoutMs || 30000;
       const error = mapUnknownErrorToPartyLayerError(err, {
@@ -369,6 +675,275 @@ export class PartyLayerClient {
       this.emit('error', { type: 'error', error });
       throw error;
     }
+  }
+
+  /**
+   * Pre-resolve everything `adapter.connect()` needs WITHOUT calling it: wallet
+   * selection, origin-allowlist + capability + install guards, and the adapter
+   * context. `prefetchedWallets` (passed during warm-up from `listWallets`)
+   * avoids a recursive `listWallets()` call.
+   */
+  private async resolveConnectPlan(
+    options?: ConnectOptions,
+    prefetchedWallets?: WalletInfo[],
+  ): Promise<ConnectPlan> {
+    // Get available wallets
+    const wallets =
+      prefetchedWallets ??
+      (await this.listWallets({
+        requiredCapabilities: options?.requiredCapabilities,
+        includeExperimental: true,
+      }));
+
+    // Filter by allowWallets
+    let availableWallets = wallets;
+    if (options?.allowWallets) {
+      availableWallets = wallets.filter((w) =>
+        options.allowWallets!.includes(w.walletId)
+      );
+    }
+
+    // Select wallet
+    let selectedWallet: WalletInfo;
+    let isNativeWallet = false;
+    if (options?.walletId) {
+      const found = availableWallets.find(
+        (w) => w.walletId === options.walletId
+      );
+      if (found) {
+        selectedWallet = found;
+      } else {
+        // Fallback: check if a native CIP-0103 adapter is registered
+        const nativeAdapter = this.adapters.get(options.walletId);
+        if (nativeAdapter) {
+          isNativeWallet = true;
+          selectedWallet = {
+            walletId: options.walletId,
+            name: nativeAdapter.name,
+            website: '',
+            icons: {},
+            capabilities: nativeAdapter.getCapabilities(),
+            adapter: { packageName: 'native-cip0103', versionRange: '*' },
+            docs: [],
+            networks: [this.config.network],
+            channel: 'stable' as const,
+            metadata: { source: 'native-cip0103' },
+          };
+        } else {
+          // A known discovery-adapter registry entry that was never registered
+          // (its provider adapter is app-supplied) → actionable error, distinct
+          // from a truly-unknown wallet. Scoped strictly to discovery-adapter.
+          const info = await this.unregisteredDiscoveryInfo(options.walletId);
+          if (info) {
+            throw new AdapterNotRegisteredError(String(options.walletId), info);
+          }
+          throw new WalletNotFoundError(String(options.walletId));
+        }
+      }
+    } else if (availableWallets.length === 0) {
+      throw new WalletNotFoundError('No wallets available');
+    } else {
+      selectedWallet = availableWallets[0];
+    }
+
+    // Get adapter
+    const adapter = this.adapters.get(selectedWallet.walletId);
+    if (!adapter) {
+      throw new WalletNotFoundError(String(selectedWallet.walletId));
+    }
+
+    // Check origin allowlist (skip for native CIP-0103 wallets and
+    // adapter-merged wallets that aren't in the registry)
+    if (!isNativeWallet) {
+      try {
+        const walletEntry = await this.registryClient.getWalletEntry(String(selectedWallet.walletId));
+        if (walletEntry.originAllowlist && walletEntry.originAllowlist.length > 0) {
+          if (!walletEntry.originAllowlist.includes(this.origin)) {
+            const { OriginNotAllowedError } = await import('@partylayer/core');
+            throw new OriginNotAllowedError(
+              this.origin,
+              walletEntry.originAllowlist
+            );
+          }
+        }
+      } catch (e) {
+        // Wallet not in registry (adapter-merged) — skip origin check
+        if (!(e instanceof WalletNotFoundError)) {
+          throw e;
+        }
+      }
+    }
+
+    // Check capabilities
+    if (options?.requiredCapabilities) {
+      capabilityGuard(adapter, options.requiredCapabilities as CapabilityKey[]);
+    }
+
+    // Check installation
+    await installGuard(adapter);
+
+    // Create adapter context
+    const ctx = this.createAdapterContext();
+
+    // Factory-based discovery adapters: inject the registry's networkHosts and
+    // pre-resolve the official adapter for the active network DURING this async
+    // phase. completeConnect (which the popup-safe fast-path can reach
+    // gesture-synchronously) then calls adapter.connect() with NO awaits before
+    // window.open. resolveOfficial throws a CLEAR error if the wallet has no
+    // host for ctx.network (never a silent wrong-network host).
+    if (adapter instanceof GenericDiscoveryAdapter && adapter.usesFactory()) {
+      let networkHosts = {};
+      try {
+        const entry = await this.registryClient.getWalletEntry(
+          String(selectedWallet.walletId),
+        );
+        networkHosts = entry.adapter?.networkHosts ?? {};
+      } catch {
+        // Not in the registry — leave empty; resolveOfficial throws a clear,
+        // network-named error rather than silently using a wrong host.
+      }
+      adapter.setNetworkHosts(networkHosts);
+      adapter.resolveOfficial(ctx.network);
+    }
+
+    return { selectedWallet, adapter, ctx, isNativeWallet };
+  }
+
+  /**
+   * Invoke `adapter.connect()` (its FIRST statement — no await precedes it) and
+   * build / persist / emit the session. Separated from plan resolution so the
+   * popup-safe fast-path can call it gesture-synchronously.
+   */
+  private async completeConnect(plan: ConnectPlan, options?: ConnectOptions): Promise<Session> {
+    const { selectedWallet, adapter, ctx } = plan;
+
+    // Connect
+    // Default timeout: 2 minutes for QR code/popup based wallets
+    const timeoutMs = options?.timeoutMs || 120000;
+    const connectPromise = adapter.connect(ctx, {
+      timeoutMs,
+      partyId: undefined,
+      preferInstalled: options?.preferInstalled,
+      onDisplayUri: options?.onDisplayUri,
+    });
+
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      setTimeout(() => {
+        reject(new Error(`Connection timed out after ${timeoutMs}ms - user did not complete wallet connection`));
+      }, timeoutMs);
+    });
+
+    const result = await Promise.race([connectPromise, timeoutPromise]);
+
+    // Create session
+    const session: Session = {
+      sessionId: toSessionId(`session_${Date.now()}_${Math.random().toString(36).substring(2, 15)}`),
+      walletId: selectedWallet.walletId,
+      partyId: result.partyId,
+      // The wallet's reported network (adapters that read the live wallet —
+      // e.g. Console via getActiveNetwork — surface the actual network here;
+      // echo-only adapters report ctx.network === config.network). Used for
+      // mismatch detection; falls back to the configured network.
+      network: (result.session.network ?? this.config.network) as NetworkId,
+      createdAt: Date.now(),
+      expiresAt: result.session.expiresAt,
+      origin: this.origin,
+      capabilitiesSnapshot: result.capabilities,
+      metadata: result.session.metadata as Record<string, string> | undefined,
+    };
+
+    // Network-mismatch detection: the wallet connected on a different network
+    // than the dApp is configured for. Always detected + flagged + emitted;
+    // 'strict' blocks the connect, 'guard'/'off' let it proceed.
+    const mismatch = this.networkMismatch(session);
+    if (mismatch) {
+      session.networkMismatch = mismatch;
+      this.emit('session:networkMismatch', {
+        type: 'session:networkMismatch',
+        sessionId: session.sessionId,
+        expected: mismatch.expected,
+        actual: mismatch.actual,
+        enforced: this.enforcement !== 'off',
+      });
+      if (this.enforcement === 'strict') {
+        throw new NetworkMismatchError(mismatch.expected, mismatch.actual);
+      }
+    }
+
+    // Persist session
+    await this.persistSession(session);
+
+    // Set active session
+    this.activeSession = session;
+    this.activeSessionNeedsProbe = false; // fresh connect — no restore re-probe needed
+
+    // Update registry status (may have changed during fetch)
+    this.updateRegistryStatus();
+
+    // Track successful connection
+    this.telemetry?.increment?.(METRICS.WALLET_CONNECT_SUCCESS);
+    this.telemetry?.increment?.(METRICS.SESSIONS_CREATED);
+
+    // Emit event
+    this.emit('session:connected', {
+      type: 'session:connected',
+      session,
+    });
+
+    return session;
+  }
+
+  /**
+   * PUBLIC popup-safe primitive: pre-resolve a connect plan ahead of the user
+   * gesture; the returned `connect()` invokes `adapter.connect()` as its first
+   * statement (no await precedes it) so a popup/remote wallet's `window.open`
+   * survives the gesture. For consumers driving such a wallet outside the modal
+   * (the modal gets this for free via the `listWallets` warm-up + `connect()`).
+   */
+  async prepareConnect(
+    options?: ConnectOptions,
+  ): Promise<{ walletId: WalletId; connect: (o?: ConnectOptions) => Promise<Session> }> {
+    const plan = await this.resolveConnectPlan(options);
+    return {
+      walletId: plan.selectedWallet.walletId,
+      connect: (o?: ConnectOptions) => this.completeConnect(plan, o ?? options),
+    };
+  }
+
+  /**
+   * Background warm-up of connect plans for popup/remote
+   * (`GenericDiscoveryAdapter`) wallets. Popup-free — `resolveConnectPlan` only
+   * runs read/guard probes. Skips already-warm entries; never throws.
+   */
+  private async warmDiscoveryPlans(wallets: WalletInfo[]): Promise<void> {
+    for (const [walletId, adapter] of this.adapters) {
+      if (!(adapter instanceof GenericDiscoveryAdapter)) continue;
+      if (this.warmPlans.has(walletId)) continue;
+      try {
+        const plan = await this.resolveConnectPlan({ walletId }, wallets);
+        this.warmPlans.set(walletId, plan);
+      } catch {
+        // best-effort; a failed warm-up just falls back to the normal path.
+      }
+    }
+  }
+
+  /**
+   * SYNCHRONOUS fast-path: if a fresh warm plan exists for a popup/remote wallet
+   * — and `options` carries no plan-affecting guards — consume it and START
+   * `completeConnect` immediately, reaching `adapter.connect()` with no awaits.
+   * Returns the in-flight Session promise, or null to fall back to the normal
+   * path (e.g. cold cache, or a non-discovery wallet).
+   */
+  private tryFastConnect(options?: ConnectOptions): Promise<Session> | null {
+    const walletId = options?.walletId;
+    if (!walletId) return null;
+    // Plan-affecting options must re-resolve (guards) → no fast-path.
+    if (options?.requiredCapabilities || options?.allowWallets) return null;
+    const plan = this.warmPlans.get(walletId);
+    if (!plan) return null;
+    this.warmPlans.delete(walletId); // one-shot; re-warmed on the next listWallets
+    return this.completeConnect(plan, options);
   }
 
   /**
@@ -390,6 +965,8 @@ export class PartyLayerClient {
       await this.removeSession(sessionId);
 
       this.activeSession = null;
+      // Drop any pre-warmed connect plans; they re-warm on the next listWallets.
+      this.warmPlans.clear();
 
       this.emit('session:disconnected', {
         type: 'session:disconnected',
@@ -443,6 +1020,7 @@ export class PartyLayerClient {
     }
 
     try {
+      this.assertNetworkOk(session);
       const ctx = this.createAdapterContext();
       return await adapter.signMessage(ctx, session, params);
     } catch (err) {
@@ -473,6 +1051,7 @@ export class PartyLayerClient {
     }
 
     try {
+      this.assertNetworkOk(session);
       const ctx = this.createAdapterContext();
       const result = await adapter.signTransaction(ctx, session, params);
       
@@ -514,6 +1093,7 @@ export class PartyLayerClient {
     }
 
     try {
+      this.assertNetworkOk(session);
       const ctx = this.createAdapterContext();
       const result = await adapter.submitTransaction(ctx, session, params);
 
@@ -555,6 +1135,7 @@ export class PartyLayerClient {
     }
 
     try {
+      this.assertNetworkOk(session);
       const ctx = this.createAdapterContext();
       return await adapter.ledgerApi(ctx, session, params);
     } catch (err) {
@@ -615,8 +1196,11 @@ export class PartyLayerClient {
    * @returns CIP-0103 compliant Provider
    */
   asProvider(): import('@partylayer/core').CIP0103Provider {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const { createProviderBridge } = require('@partylayer/provider') as typeof import('@partylayer/provider');
+    // Static import (top of file) — a runtime `require('@partylayer/provider')`
+    // hits esbuild's `__require` shim in the ESM build and throws "Dynamic
+    // require not supported" in browser bundles (dev + prod), crashing
+    // PartyLayerKit on mount. `@partylayer/provider` does not import
+    // `@partylayer/sdk`, so the static import introduces no cycle.
     return createProviderBridge(this);
   }
 
@@ -631,6 +1215,16 @@ export class PartyLayerClient {
       this.telemetry.flush().catch(() => {});
     }
     
+    // Tear down the persistent announce subscription (remove the window listener)
+    // and any pending debounced `wallets:changed` emit (no leak / late fire).
+    this.announceUnsubscribe?.();
+    this.announceUnsubscribe = null;
+    this.announceRegistry.clear();
+    if (this.walletsChangedTimer !== null) {
+      clearTimeout(this.walletsChangedTimer);
+      this.walletsChangedTimer = null;
+    }
+
     this.eventHandlers.clear();
     this.activeSession = null;
   }
@@ -668,18 +1262,21 @@ export class PartyLayerClient {
     try {
       const data = JSON.stringify(session);
       const encrypted = await this.crypto.encrypt(data, this.origin);
-      await this.storage.set(`session_${session.sessionId}`, encrypted);
+      await this.storage.set(SESSION_STORAGE_KEY, encrypted);
     } catch (err) {
       this.logger.warn('Failed to persist session', err);
     }
   }
 
   /**
-   * Remove session from storage
+   * Remove session from storage.
+   *
+   * Accepts a sessionId for call-site symmetry, but since the SDK tracks one
+   * active session we always remove the single SESSION_STORAGE_KEY.
    */
-  private async removeSession(sessionId: SessionId): Promise<void> {
+  private async removeSession(_sessionId: SessionId): Promise<void> {
     try {
-      await this.storage.remove(`session_${sessionId}`);
+      await this.storage.remove(SESSION_STORAGE_KEY);
     } catch (err) {
       this.logger.warn('Failed to remove session', err);
     }
@@ -691,9 +1288,9 @@ export class PartyLayerClient {
   private async restoreSession(): Promise<Session | null> {
     // Track restore attempt
     this.telemetry?.increment?.(METRICS.RESTORE_ATTEMPTS);
-    
+
     try {
-      const encrypted = await this.storage.get('active_session');
+      const encrypted = await this.storage.get(SESSION_STORAGE_KEY);
       if (!encrypted) {
         return null;
       }
@@ -712,6 +1309,40 @@ export class PartyLayerClient {
         return null;
       }
 
+      // Network gate (generic, ALL wallets) — runs BEFORE any adapter handoff.
+      // The persisted session carries its network (our network-aware envelope);
+      // validate it against the configured network. Without this, a
+      // discovery-adapter session takes the "restore as-is" path below
+      // (GenericDiscoveryAdapter has no adapter.restore), silently reviving e.g.
+      // a devnet identity on a mainnet app — and the official adapter's restore
+      // is silent, so the connect-time mismatch check never fires. Under
+      // enforcement we REFUSE + clear; under 'off' we restore but flag (mirrors
+      // the connect-time mismatch behavior).
+      const mismatch = this.networkMismatch(session);
+      if (mismatch) {
+        this.emit('session:networkMismatch', {
+          type: 'session:networkMismatch',
+          sessionId: session.sessionId,
+          expected: mismatch.expected,
+          actual: mismatch.actual,
+          enforced: this.enforcement !== 'off',
+        });
+        if (this.enforcement !== 'off') {
+          this.logger.warn('Refused session restore — network mismatch', {
+            expected: mismatch.expected,
+            actual: mismatch.actual,
+          });
+          await this.removeSession(session.sessionId);
+          this.emit('session:expired', {
+            type: 'session:expired',
+            sessionId: session.sessionId,
+          });
+          return null;
+        }
+        // 'off': proceed with restore but flag the mismatch on the session.
+        session.networkMismatch = mismatch;
+      }
+
       // Try to restore with adapter
       const adapter = this.adapters.get(session.walletId);
       if (adapter?.restore) {
@@ -723,6 +1354,7 @@ export class PartyLayerClient {
 
         if (restored) {
           this.activeSession = restored;
+          this.activeSessionNeedsProbe = false; // adapter.restore already live-probed
           // Persist restored session (may have updated metadata)
           await this.persistSession(restored);
           
@@ -750,6 +1382,10 @@ export class PartyLayerClient {
       // If restore not supported, use stored session as-is
       // (Some adapters don't support restore but session metadata is still valid)
       this.activeSession = session;
+      // Revived WITHOUT a live probe — e.g. a configured-announce wallet whose
+      // adapter isn't registered yet (it's born lazily in aggregateAnnouncedWallets).
+      // Flag it so that adapter, once created, re-validates this session via status().
+      this.activeSessionNeedsProbe = true;
       return session;
     } catch (err) {
       this.logger.warn('Failed to restore session', err);

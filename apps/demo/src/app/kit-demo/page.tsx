@@ -4,12 +4,14 @@ import { useState, useEffect, createContext, useContext } from 'react';
 import {
   PartyLayerKit,
   ConnectButton,
-  useSession,
+  useClientSession,
   useWallets,
   useSignMessage,
   usePartyLayer,
 } from '@partylayer/react';
 import { useBreakpoint, responsive } from '../hooks/useBreakpoint';
+import { buildDemoAdapters } from '../../lib/canton-demo-adapter';
+import { sortByCanonicalOrder, CANONICAL_WALLET_ORDER } from '../../lib/wallet-order';
 
 // ─── Design Tokens (light + dark, matching marketing/landing page) ──────────
 
@@ -88,14 +90,18 @@ const WALLET_LOGOS: Record<string, string> = {
   cantor8: '/wallets/cantor8.png',
   bron: '/wallets/bron.png',
   nightly: '/wallets/nightly.svg',
+  send: '/wallets/send-logo.jpg',
+  walley: '/wallets/walley-logo.png',
+  walletconnect: '/wallets/walletconnect.svg',
 };
 
-function getWalletLogo(walletId: string): string | null {
+function getWalletLogo(walletId: string, registryIconUrl?: string): string | null {
   const id = walletId.replace(/^cip0103:/, '');
   if (WALLET_LOGOS[id]) return WALLET_LOGOS[id];
   for (const [key, url] of Object.entries(WALLET_LOGOS)) {
     if (id.toLowerCase().includes(key)) return url;
   }
+  if (registryIconUrl) return registryIconUrl;
   return null;
 }
 
@@ -105,14 +111,20 @@ function DemoContent() {
   const bp = useBreakpoint();
   const c = useTokens();
   const shadow = c.shadow;
-  const session = useSession();
+  const session = useClientSession();
   const { wallets, isLoading } = useWallets();
   const { signMessage, isSigning, error: signError } = useSignMessage();
   const client = usePartyLayer();
   const [signResult, setSignResult] = useState<string | null>(null);
 
-  const nativeWallets = wallets.filter((w) => w.metadata?.source === 'native-cip0103');
-  const registryWallets = wallets.filter((w) => !w.metadata?.source);
+  const nativeWallets = sortByCanonicalOrder(
+    wallets.filter((w) => w.metadata?.source === 'native-cip0103'),
+    (w) => w.walletId
+  );
+  const registryWallets = sortByCanonicalOrder(
+    wallets.filter((w) => !w.metadata?.source),
+    (w) => w.walletId
+  );
 
   const handleSign = async () => {
     setSignResult(null);
@@ -208,6 +220,7 @@ function DemoContent() {
                         name={w.name}
                         walletId={w.walletId}
                         capabilities={w.capabilities}
+                        iconUrl={w.icons?.sm}
                         isNative
                       />
                     ))}
@@ -226,6 +239,7 @@ function DemoContent() {
                         name={w.name}
                         walletId={w.walletId}
                         capabilities={w.capabilities}
+                        iconUrl={w.icons?.sm}
                         website={w.website}
                       />
                     ))}
@@ -475,16 +489,18 @@ function WalletCard({
   capabilities,
   isNative,
   website,
+  iconUrl,
 }: {
   name: string;
   walletId: string;
   capabilities: string[];
   isNative?: boolean;
   website?: string;
+  iconUrl?: string;
 }) {
   const c = useTokens();
   const shadow = c.shadow;
-  const logo = getWalletLogo(walletId);
+  const logo = getWalletLogo(walletId, iconUrl);
 
   return (
     <div style={{
@@ -755,7 +771,7 @@ export default function KitDemoPage() {
         fontFamily: font,
         transition: 'background-color 200ms, color 200ms',
       }}>
-        <PartyLayerKit network="devnet" appName="PartyLayer Kit Demo" theme={theme} walletIcons={WALLET_LOGOS}>
+        <PartyLayerKit network="devnet" appName="PartyLayer Kit Demo" theme={theme} walletIcons={WALLET_LOGOS} walletOrder={CANONICAL_WALLET_ORDER} adapters={buildDemoAdapters()} registryUrl="/registry">
           <div style={{ maxWidth: '880px', margin: '0 auto', padding: '0 24px' }}>
 
             {/* Navbar */}

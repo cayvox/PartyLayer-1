@@ -13,7 +13,15 @@
  * - Wallet Integration Guide: https://docs.digitalasset.com/integrate/devnet/index.html
  */
 
-import type { WalletInfo, NetworkId, CapabilityKey } from '@partylayer/core';
+import type {
+  AdapterTransport,
+  CapabilityKey,
+  Cip0103Support,
+  NetworkHosts,
+  NetworkId,
+  ProviderDetection,
+  WalletInfo,
+} from '@partylayer/core';
 import { toWalletId } from '@partylayer/core';
 
 /**
@@ -47,16 +55,51 @@ export interface RegistryWalletEntry {
     signMessage: boolean;
     signTransaction: boolean;
     submitTransaction: boolean;
+    /** Can report transaction status (e.g. await commit). NOT the same as
+     *  emitting provider events — see `events`. */
     transactionStatus: boolean;
     switchNetwork: boolean;
     multiParty: boolean;
+    mobileConnect?: boolean;
+    remoteSigner?: boolean;
+    /**
+     * Emits CIP-0103 provider events (statusChanged/accountsChanged/...).
+     * Optional + additive; defaults to false. Declared ONLY when the wallet
+     * actually emits — popup/remote wallets (e.g. Walley) expose the on/emit
+     * surface but never fire, so they MUST omit/false this. (Decoupled from
+     * `transactionStatus`, which previously — and incorrectly — implied events.)
+     */
+    events?: boolean;
   };
   /** Adapter configuration */
   adapter: {
     /** Adapter type/name */
     type: string;
-    /** Adapter-specific configuration */
+    /**
+     * How the SDK obtains this wallet's provider. Optional + additive — when
+     * omitted the SDK uses today's behavior (injected `window.canton` scan /
+     * announce). `'discovery-adapter'` routes the entry through the generic
+     * official-adapter bridge: the SDK matches an app-supplied
+     * `OfficialProviderAdapter` whose `providerId` equals `config.providerId`.
+     * No wallet-specific adapter package is involved.
+     */
+    transport?: AdapterTransport;
+    /**
+     * Adapter-specific configuration. For `transport: 'discovery-adapter'`,
+     * `config.providerId` (string) keys the app-supplied official adapter.
+     */
     config?: Record<string, unknown>;
+    /**
+     * Network→host mapping for `transport: 'discovery-adapter'` wallets. DATA,
+     * not code: the generic bridge resolves `networkHosts[activeNetwork]` at
+     * connect time and constructs the app-supplied official adapter (factory
+     * form) with it — so no wallet URL is hardcoded in SDK or app code, and an
+     * app simply sets `<PartyLayerKit network="…">`. Optional + additive: absent
+     * ⇒ the app must supply an explicit host (a pre-constructed instance); a
+     * network missing from the map is a CLEAR connect-time failure naming the
+     * unsupported network, never a silent wrong-network fallback.
+     */
+    networkHosts?: NetworkHosts;
   };
   /** Installation detection hints */
   installation?: {
@@ -66,6 +109,10 @@ export interface RegistryWalletEntry {
     scriptTag?: string;
     /** Check if wallet is installed via browser extension */
     extensionId?: string;
+    /** Deep link URL for mobile wallet connect */
+    deeplink?: string;
+    /** OAuth-based authentication */
+    oauth?: boolean;
   };
   /** SDK version compatibility */
   sdkVersion?: string;
@@ -73,6 +120,31 @@ export interface RegistryWalletEntry {
   version?: string;
   /** Origin allowlist (optional - if present, only these origins can connect) */
   originAllowlist?: string[];
+  /**
+   * Marks the entry as beta even when it ships in the `stable` registry
+   * channel. UIs (modal, picker, capability matrix) can use this flag to
+   * surface a "Beta" badge regardless of which channel file the entry
+   * lives in. Optional and additive — older registries omit it and the
+   * flag defaults to `false`.
+   */
+  beta?: boolean;
+  /**
+   * Optional CIP-0103 runtime detection rules. When present, the SDK +
+   * picker can match the currently-injected `window.canton` provider to
+   * this entry and surface it in the "CIP-0103 Native" section with full
+   * branding. Lets us add new CIP-0103 wallets to the ecosystem with a
+   * registry JSON update — no SDK code change required.
+   */
+  providerDetection?: ProviderDetection;
+  /**
+   * Canonical CIP-0103 support marker. When `cip0103.native === true`
+   * the picker always renders this entry in the "CIP-0103 NATIVE"
+   * section, regardless of install state. The accompanying `evidence`
+   * field is intended to be a public URL that justifies the claim
+   * (npm package readme, blog post, etc.) and may be surfaced by UIs as
+   * a tooltip / "verified" link.
+   */
+  cip0103?: Cip0103Support;
 }
 
 /**
@@ -186,15 +258,38 @@ export function validateWalletEntry(
 
   const e = entry as Record<string, unknown>;
 
+  const adapter = e.adapter as Record<string, unknown> | undefined;
+  const transport = adapter?.transport;
+  const transportValid =
+    transport === undefined ||
+    transport === 'injected' ||
+    transport === 'announce' ||
+    transport === 'discovery-adapter';
+
+  // networkHosts (when present) must be an object of string hosts keyed by
+  // network — a malformed map would otherwise surface as a runtime connect
+  // failure rather than a registry-integrity failure.
+  const networkHosts = adapter?.networkHosts;
+  const networkHostsValid =
+    networkHosts === undefined ||
+    (typeof networkHosts === 'object' &&
+      networkHosts !== null &&
+      !Array.isArray(networkHosts) &&
+      Object.values(networkHosts as Record<string, unknown>).every(
+        (h) => typeof h === 'string' && h.length > 0,
+      ));
+
   return (
     typeof e.id === 'string' &&
     typeof e.name === 'string' &&
     Array.isArray(e.supportedNetworks) &&
     typeof e.capabilities === 'object' &&
     e.capabilities !== null &&
-    typeof e.adapter === 'object' &&
-    e.adapter !== null &&
-    typeof (e.adapter as Record<string, unknown>).type === 'string' &&
+    typeof adapter === 'object' &&
+    adapter !== null &&
+    typeof adapter.type === 'string' &&
+    transportValid &&
+    networkHostsValid &&
     (e.originAllowlist === undefined || Array.isArray(e.originAllowlist))
   );
 }
@@ -216,8 +311,23 @@ export function registryEntryToWalletInfo(
   if (entry.capabilities.submitTransaction) {
     capabilities.push('submitTransaction');
   }
-  if (entry.capabilities.transactionStatus) {
+  // Decoupled: `events` is derived from the EXPLICIT `events` flag — emitting
+  // provider events — NOT from `transactionStatus` (which only means the wallet
+  // can report tx status). A wallet that can await a tx commit but never emits
+  // events (e.g. Walley) no longer falsely claims the `events` capability.
+  if (entry.capabilities.events) {
     capabilities.push('events');
+  }
+
+  // Transport capabilities — inferred from installation hints and capability flags
+  if (entry.installation?.windowProperty) {
+    capabilities.push('injected');
+  }
+  if (entry.installation?.deeplink || entry.capabilities.mobileConnect) {
+    capabilities.push('deeplink');
+  }
+  if (entry.capabilities.remoteSigner) {
+    capabilities.push('remoteSigner');
   }
 
   return {
@@ -246,10 +356,26 @@ export function registryEntryToWalletInfo(
     minSdkVersion: entry.sdkVersion,
     networks: entry.supportedNetworks,
     channel,
-    // Store origin allowlist in metadata for SDK enforcement
-    ...(entry.originAllowlist
-      ? { metadata: { originAllowlist: JSON.stringify(entry.originAllowlist) } }
+    // Adapter metadata is exposed to the picker via WalletInfo.metadata
+    // (typed `Record<string, string>`). Two flags routed through here today:
+    //   - originAllowlist: SDK-side origin enforcement
+    //   - beta:            UI badge ("Beta" tag in modal + capability matrix)
+    // Both are optional — only emitted when the registry entry sets them.
+    ...((entry.originAllowlist || entry.beta)
+      ? {
+          metadata: {
+            ...(entry.originAllowlist
+              ? { originAllowlist: JSON.stringify(entry.originAllowlist) }
+              : {}),
+            ...(entry.beta ? { beta: 'true' } : {}),
+          },
+        }
       : {}),
+    // CIP-0103 runtime-detection rules pass through verbatim when present;
+    // see WalletInfo.providerDetection for how the picker uses them.
+    ...(entry.providerDetection ? { providerDetection: entry.providerDetection } : {}),
+    // Canonical CIP-0103 support marker.
+    ...(entry.cip0103 ? { cip0103: entry.cip0103 } : {}),
   };
 }
 

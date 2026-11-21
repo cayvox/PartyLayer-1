@@ -66,6 +66,91 @@ export interface AdapterMetadata {
 }
 
 /**
+ * Provider matcher: a single rule used by `ProviderDetection.matchers`.
+ *
+ * Three match modes are defined; OR-combined inside a `ProviderDetection`.
+ * Exact and prefix work on string fields directly; domain interprets the
+ * field as a URL and tests its hostname against the registrable domain
+ * (with subdomain support).
+ */
+export type ProviderMatcher =
+  | {
+      field: 'kernel.url' | 'kernel.userUrl';
+      match: 'domain';
+      /** Hostname or registrable domain. Subdomains are accepted. */
+      value: string;
+    }
+  | {
+      field:
+        | 'kernel.id'
+        | 'kernel.url'
+        | 'kernel.userUrl'
+        | 'kernel.clientType'
+        | 'provider.id';
+      match: 'exact';
+      /** One or more exact values; ANY match returns true. */
+      values: string[];
+    }
+  | {
+      field: 'kernel.id' | 'kernel.url' | 'kernel.userUrl';
+      match: 'prefix';
+      value: string;
+    };
+
+/**
+ * Standards-first runtime detection of a CIP-0103 wallet.
+ *
+ * The registry stores these rules so that any current or future wallet
+ * implementing `window.canton` can be identified without code changes —
+ * a registry JSON update is enough.
+ */
+export interface ProviderDetection {
+  /** Transport mechanism. Currently only 'window.canton' is supported. */
+  transport: 'window.canton';
+  /** OR-list of matchers. Provider matches if ANY matcher returns true. */
+  matchers: ProviderMatcher[];
+}
+
+/**
+ * Canonical CIP-0103 support marker.
+ *
+ * When `native: true`, the wallet is treated as a first-class CIP-0103
+ * provider in the picker — it always appears in the "CIP-0103 NATIVE"
+ * section regardless of install state, with a per-wallet readiness
+ * indicator that reflects whether the wallet's `providerDetection` rules
+ * matched the currently-injected `window.canton` provider.
+ *
+ * The field is optional; wallets that don't claim CIP-0103 support omit
+ * it and continue to appear in the "AVAILABLE" section as before.
+ */
+export interface Cip0103Support {
+  /** True if this wallet has confirmed CIP-0103 dApp API support. */
+  native: boolean;
+  /** Public evidence link (npm package, blog post, official statement). */
+  evidence?: string;
+  /** ISO date when CIP-0103 support was confirmed (informational). */
+  since?: string;
+}
+
+/**
+ * How the SDK obtains a wallet's provider for a registry entry.
+ *
+ * - `'injected'`          — `window.canton.*` scanning (the implicit default
+ *                           behavior when `transport` is omitted).
+ * - `'announce'`          — CIP-0103 `canton:announceProvider` discovery.
+ * - `'discovery-adapter'` — the provider comes from an app-supplied
+ *                           `OfficialProviderAdapter` (the official
+ *                           `@canton-network/core-wallet-discovery`
+ *                           `ProviderAdapter` shape), bridged generically by
+ *                           the SDK. For popup/remote wallets that neither
+ *                           inject `window.canton` nor announce. No
+ *                           wallet-specific adapter package is involved.
+ *
+ * Additive + optional: older registries omit it and keep today's behavior.
+ */
+export type AdapterTransport = 'injected' | 'announce' | 'discovery-adapter';
+
+/**
  * Wallet information from registry
  */
 export interface WalletInfo {
@@ -99,6 +184,29 @@ export interface WalletInfo {
   channel: 'stable' | 'beta';
   /** Additional metadata (e.g., originAllowlist) */
   metadata?: Record<string, string>;
+  /**
+   * Optional CIP-0103 runtime detection rules. When present, the picker can
+   * decide whether this wallet is the currently-injected `window.canton`
+   * provider and route it into the "CIP-0103 Native" section without any
+   * hardcoded wallet IDs. Wallets that aren't CIP-0103-injected (e.g. Bron,
+   * Cantor8 deeplink) leave this unset.
+   */
+  providerDetection?: ProviderDetection;
+  /**
+   * Canonical CIP-0103 support marker. When set with `native: true`, the
+   * picker always lists the wallet in the "CIP-0103 NATIVE" section
+   * regardless of install state.
+   */
+  cip0103?: Cip0103Support;
+}
+
+/**
+ * Returns true if the wallet has been canonically marked as CIP-0103
+ * native via its registry entry. The check is structural so it works on
+ * both raw `RegistryWalletEntry` shapes and converted `WalletInfo`.
+ */
+export function isCip0103Native(entry: { cip0103?: Cip0103Support }): boolean {
+  return entry?.cip0103?.native === true;
 }
 
 /**
@@ -124,6 +232,12 @@ export interface Session {
   capabilitiesSnapshot: CapabilityKey[];
   /** Additional metadata (encrypted in storage) */
   metadata?: Record<string, string>;
+  /**
+   * Set when the wallet's reported network differs from the dApp's configured
+   * network (CAIP-2 normalized). Absent when the networks match or no confident
+   * mismatch was detected. See `networkEnforcement` for blocking behavior.
+   */
+  networkMismatch?: { expected: string; actual: string };
 }
 
 /**

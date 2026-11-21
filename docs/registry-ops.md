@@ -85,7 +85,7 @@ partylayer-registry sign --channel stable --key registry/keys/dev.key
 partylayer-registry bump-sequence --channel stable
 
 # Sign
-partylayer-registry sign --channel stable --key registry/keys/dev.pub
+partylayer-registry sign --channel stable --key registry/keys/dev.key
 ```
 
 ## Key Rotation
@@ -243,5 +243,4 @@ This prints file locations to serve via CDN.
 
 ## See Also
 
-- [Phase 4 Summary](./PHASE4_SUMMARY.md) - Operational runbook
 - [Release Process](./releasing.md) - Package versioning and publishing

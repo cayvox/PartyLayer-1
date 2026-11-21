@@ -2,7 +2,12 @@
 
 import { useState, useRef, useEffect, useCallback, type ReactNode } from 'react';
 import Link from 'next/link';
-import { PartyLayerKit, WalletModal, useSession, useDisconnect, truncatePartyId } from '@partylayer/react';
+// Note: useClientSession = the legacy SDK-layer getter (partyId/walletId here);
+// useAccount = the new reactive session-store hook (the live session indicator).
+import { PartyLayerKit, WalletModal, useClientSession, useDisconnect, truncatePartyId, useAccount, usePartyLayer } from '@partylayer/react';
+import { DEFAULT_RETRY_POLICY, type SessionStoreOptions } from '@partylayer/session';
+import { buildDemoAdapters } from '../lib/canton-demo-adapter';
+import { sortByCanonicalOrder, CANONICAL_WALLET_ORDER } from '../lib/wallet-order';
 import { useBreakpoint, responsive } from './hooks/useBreakpoint';
 
 /* ─── Design Tokens (mirrored from apps/marketing/src/design/tokens.ts) ── */
@@ -41,13 +46,93 @@ const NPM_URL = 'https://www.npmjs.com/package/@partylayer/sdk';
 
 /* ─── Wallet Data ──────────────────────────────────────────────────────── */
 
-const wallets = [
-  { id: 'console', name: 'Console Wallet', desc: 'Official Console Wallet for Canton Network', transport: 'Injected', logo: '/wallets/console.png' },
-  { id: 'loop', name: '5N Loop', desc: '5N Loop Wallet for Canton Network', transport: 'QR Code / Popup', logo: '/wallets/loop.svg' },
-  { id: 'cantor8', name: 'Cantor8 (C8)', desc: 'Cantor8 Wallet for Canton Network', transport: 'Deep Link', logo: '/wallets/cantor8.png' },
-  { id: 'nightly', name: 'Nightly', desc: 'Multichain wallet with native Canton support', transport: 'Injected', logo: '/wallets/nightly.svg' },
-  { id: 'bron', name: 'Bron', desc: 'Enterprise wallet for Canton Network', transport: 'OAuth2 / API', logo: '/wallets/bron.png' },
-];
+// Sorted by the single canonical order (no per-list hardcoded order).
+const wallets = sortByCanonicalOrder(
+  [
+    { id: 'console', name: 'Console Wallet', desc: 'Official Console Wallet for Canton Network', transport: 'Extension + Mobile', logo: '/wallets/console.png' },
+    { id: 'send', name: 'Send', desc: 'Passkey-based Canton wallet (mainnet)', transport: 'Injected (window.canton)', logo: '/wallets/send-logo.jpg' },
+    { id: 'loop', name: '5N Loop', desc: '5N Loop Wallet for Canton Network', transport: 'QR Code / Popup', logo: '/wallets/loop.svg' },
+    { id: 'walletconnect', name: 'WalletConnect', desc: 'Connect any WalletConnect-compatible Canton wallet', transport: 'WalletConnect', logo: '/wallets/walletconnect.svg' },
+    { id: 'cantor8', name: 'Cantor8 (C8)', desc: 'Cantor8 Wallet for Canton Network', transport: 'Deep Link', logo: '/wallets/cantor8.png' },
+    { id: 'nightly', name: 'Nightly', desc: 'Multichain wallet with native Canton support', transport: 'Injected', logo: '/wallets/nightly.svg' },
+    { id: 'bron', name: 'Bron', desc: 'Enterprise wallet for Canton Network', transport: 'OAuth2 / API', logo: '/wallets/bron.png' },
+  ],
+  (w) => w.id
+);
+
+/* ─── Dynamic supported-wallets source ─────────────────────────────────────
+ * The "supported wallets" cards + the hero's compact strip derive from the
+ * canonical registry (NOT the static `wallets` above, which is only the hero
+ * PREVIEW), so every new registry wallet (e.g. walley) appears automatically.
+ * We use the UNFILTERED registryClient.getRegistry() — not useWallets(), which
+ * network-filters + gates (it would drop Send/mainnet on this devnet demo). The
+ * call is SWR-cached in the client, so the cards + strip share one fetch and
+ * stay in sync. */
+type RegWallet = {
+  id: string;
+  name: string;
+  description?: string;
+  icon?: string;
+  adapter?: { transport?: string };
+  installation?: { windowProperty?: string; deeplink?: string; oauth?: boolean; scriptTag?: string };
+};
+
+function useRegistryWallets(): RegWallet[] {
+  const client = usePartyLayer();
+  const [list, setList] = useState<RegWallet[]>([]);
+  useEffect(() => {
+    let alive = true;
+    client.registryClient
+      .getRegistry()
+      .then((r) => { if (alive) setList([...((r.wallets ?? []) as RegWallet[])]); })
+      .catch(() => { /* offline → empty; the section just renders nothing */ });
+    return () => { alive = false; };
+  }, [client]);
+  return list;
+}
+
+/** Friendly transport label, derived from the registry entry (adapter.transport
+ *  when set — only walley today — else the installation hints). Dynamic: no
+ *  hardcoded per-wallet copy. */
+function transportLabel(w: RegWallet): string {
+  switch (w.adapter?.transport) {
+    case 'discovery-adapter': return 'Popup / remote';
+    case 'remote': return 'Remote / relay';
+    case 'announce': return 'Announce';
+    case 'injected': return 'Injected';
+  }
+  const i = w.installation ?? {};
+  if (i.windowProperty) return 'Injected';
+  if (i.deeplink) return 'Deep link';
+  if (i.oauth) return 'OAuth';
+  if (i.scriptTag) return 'Script';
+  return 'Browser';
+}
+
+/** Description as shown on the ecosystem cards. Strips a trailing network-scope
+ *  sentence ("… Mainnet only.") — the cards are a network-agnostic ecosystem
+ *  overview, so a per-network caveat (only Send carries one today) is confusing
+ *  on the devnet demo. Registry data itself is untouched. */
+function cardDescription(w: RegWallet): string {
+  return (w.description ?? '').replace(/\s*Mainnet only\.?\s*$/i, '').trim();
+}
+
+// Compact wallet strip for the Architecture showcase. Its own component so the
+// useRegistryWallets() hook is in scope (archNodes is a module-level array and
+// cannot call hooks). Registry-derived → stays in sync with the cards below.
+function SupportedWalletsStrip() {
+  const registryWallets = useRegistryWallets();
+  return (
+    <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+      {registryWallets.map(w => (
+        <div key={w.id} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <img src={WALLET_LOGOS[w.id] ?? w.icon} alt={w.name} width={24} height={24} style={{ borderRadius: 6 }} />
+          <span style={{ fontSize: 13, fontWeight: 500, color: t.fg }}>{w.name}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
 
 /* ─── Global Styles (keyframes for pulse animation) ───────────────────── */
 
@@ -397,21 +482,57 @@ const WALLET_LOGOS: Record<string, string> = {
   cantor8: '/wallets/cantor8.png',
   bron: '/wallets/bron.png',
   nightly: '/wallets/nightly.svg',
+  send: '/wallets/send-logo.jpg',
+  walley: '/wallets/walley-logo.png',
+  walletconnect: '/wallets/walletconnect.svg',
 };
 
 /* ─── Nav (from apps/marketing/src/components/Nav.tsx) ─────────────────── */
 
-const navLinks = [
+const navLinks: { label: string; href: string; badge?: string; external?: boolean }[] = [
   { label: 'Docs', href: '/docs/introduction' },
   { label: 'Features', href: '#features' },
   { label: 'Wallets', href: '#wallets' },
   { label: 'Quickstart', href: '#quickstart' },
   { label: 'FAQ', href: '#faq' },
+  { label: 'Studio', href: 'https://studio.partylayer.xyz', badge: 'new', external: true },
 ];
+
+/**
+ * Live session indicator — small + unobtrusive. Reads the NEW reactive
+ * session-store hook (`useAccount`) so every Vercel preview is a live integration
+ * test of the session layer (status + primary party + networkId chip). Hidden
+ * when fully disconnected.
+ */
+function SessionIndicator() {
+  const { status, party, networkId, isConnected } = useAccount();
+  if (status === 'disconnected') return null; // unobtrusive when there's no live session
+  const color = isConnected ? '#10B981' : '#F59E0B'; // connecting/reconnecting → amber
+  return (
+    <div
+      title={`session: ${status}`}
+      style={{
+        display: 'inline-flex', alignItems: 'center', gap: 8,
+        padding: '4px 10px', borderRadius: 999,
+        border: '1px solid rgba(148,163,184,0.3)', fontSize: 12,
+        fontFamily: 'ui-sans-serif, system-ui, sans-serif',
+      }}
+    >
+      <span style={{ width: 7, height: 7, borderRadius: '50%', background: color }} />
+      <span style={{ textTransform: 'capitalize' }}>{status}</span>
+      {party && (
+        <span style={{ fontFamily: 'ui-monospace, monospace', opacity: 0.8 }}>{truncatePartyId(party, 6)}</span>
+      )}
+      {networkId && (
+        <span style={{ padding: '1px 6px', borderRadius: 6, background: 'rgba(148,163,184,0.15)' }}>{networkId}</span>
+      )}
+    </div>
+  );
+}
 
 function Nav({ onConnect }: { onConnect: () => void }) {
   const bp = useBreakpoint();
-  const session = useSession();
+  const session = useClientSession();
   const { disconnect } = useDisconnect();
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
@@ -455,11 +576,17 @@ function Nav({ onConnect }: { onConnect: () => void }) {
           <div style={{ display: 'flex', alignItems: 'center', gap: bp === 'tablet' ? 16 : 32 }}>
             {navLinks.map(link => (
               <a key={link.href} href={link.href}
-                style={{ fontSize: bp === 'tablet' ? 13 : 14, fontWeight: 500, color: t.slate600, textDecoration: 'none', transition: `color 150ms ${t.ease}` }}
-                onMouseOver={e => { (e.target as HTMLElement).style.color = t.fg; }}
-                onMouseOut={e => { (e.target as HTMLElement).style.color = t.slate600; }}
+                {...(link.external ? { target: '_blank', rel: 'noopener noreferrer' } : {})}
+                style={{ ...(link.badge ? { display: 'inline-flex', alignItems: 'center' } : {}), fontSize: bp === 'tablet' ? 13 : 14, fontWeight: 500, color: t.slate600, textDecoration: 'none', transition: `color 150ms ${t.ease}` }}
+                onMouseOver={e => { (e.currentTarget as HTMLElement).style.color = t.fg; }}
+                onMouseOut={e => { (e.currentTarget as HTMLElement).style.color = t.slate600; }}
               >
                 {link.label}
+                {link.badge && (
+                  <span style={{ marginLeft: 6, padding: '1px 6px', fontSize: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.3, color: t.brand600, background: t.brand50, border: `1px solid ${t.brand100}`, borderRadius: 9999 }}>
+                    {link.badge}
+                  </span>
+                )}
               </a>
             ))}
           </div>
@@ -577,12 +704,18 @@ function Nav({ onConnect }: { onConnect: () => void }) {
         }}>
           {navLinks.map(link => (
             <a key={link.href} href={link.href} onClick={() => setMobileMenuOpen(false)}
+              {...(link.external ? { target: '_blank', rel: 'noopener noreferrer' } : {})}
               style={{
-                display: 'block', padding: '14px 0', fontSize: 15, fontWeight: 500,
+                display: 'flex', alignItems: 'center', padding: '14px 0', fontSize: 15, fontWeight: 500,
                 color: t.slate600, textDecoration: 'none',
                 borderBottom: `1px solid ${t.border}`,
               }}>
               {link.label}
+              {link.badge && (
+                <span style={{ marginLeft: 8, padding: '1px 6px', fontSize: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.3, color: t.brand600, background: t.brand50, border: `1px solid ${t.brand100}`, borderRadius: 9999 }}>
+                  {link.badge}
+                </span>
+              )}
             </a>
           ))}
         </div>
@@ -713,9 +846,10 @@ function Hero({ onConnect }: { onConnect: () => void }) {
                       Select a wallet to connect to this dapp.
                     </p>
 
-                    {/* Wallet List Preview */}
+                    {/* Wallet List Preview — capped to 4 (the real PartyLayerKit
+                        modal shows ALL wallets; this is just a hero mockup). */}
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                      {wallets.map((wallet, i) => (
+                      {wallets.slice(0, 4).map((wallet, i) => (
                         <button key={wallet.id} onClick={onConnect}
                           style={{
                             display: 'flex', alignItems: 'center', gap: 12, padding: 12,
@@ -867,7 +1001,7 @@ const archNodes: { id: ArchNodeId; label: string; sub: string; icon: ReactNode; 
     ),
   },
   {
-    id: 'wallets', label: 'Wallets', sub: '5 wallets, 1 integration',
+    id: 'wallets', label: 'Wallets', sub: '1 integration',
     icon: (
       <svg width={28} height={28} fill="none" viewBox="0 0 24 24" stroke="#F59E0B" strokeWidth={1.5}>
         <path strokeLinecap="round" strokeLinejoin="round" d="M21 12a2.25 2.25 0 00-2.25-2.25H15a3 3 0 11-6 0H5.25A2.25 2.25 0 003 12m18 0v6a2.25 2.25 0 01-2.25 2.25H5.25A2.25 2.25 0 013 18v-6m18 0V9M3 12V9m18 0a2.25 2.25 0 00-2.25-2.25H5.25A2.25 2.25 0 003 9m18 0V6a2.25 2.25 0 00-2.25-2.25H5.25A2.25 2.25 0 003 6v3" />
@@ -876,14 +1010,7 @@ const archNodes: { id: ArchNodeId; label: string; sub: string; icon: ReactNode; 
     detail: (
       <div>
         <div style={{ fontSize: 13, fontWeight: 600, color: t.fg, marginBottom: 8 }}>Supported Wallets</div>
-        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-          {wallets.map(w => (
-            <div key={w.id} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <img src={w.logo} alt={w.name} width={24} height={24} style={{ borderRadius: 6 }} />
-              <span style={{ fontSize: 13, fontWeight: 500, color: t.fg }}>{w.name}</span>
-            </div>
-          ))}
-        </div>
+        <SupportedWalletsStrip />
       </div>
     ),
   },
@@ -1131,7 +1258,7 @@ const proofItems = [
       </svg>
     ),
     title: 'Multi-Wallet',
-    description: 'Console, Loop, Cantor8, Nightly, Bron — one integration for all.',
+    description: 'Console, Send, Loop, Cantor8, Nightly, Bron — one integration for all.',
   },
   {
     icon: (
@@ -1230,6 +1357,7 @@ function ProofBar() {
 
 function WalletGrid() {
   const bp = useBreakpoint();
+  const registryWallets = useRegistryWallets(); // dynamic: every registry wallet appears
   return (
     <section id="wallets" style={{ padding: responsive(bp, '56px 0', '64px 0', '80px 0'), borderTop: `1px solid ${t.border}`, fontFamily: t.font }}>
       <div style={{ maxWidth: 1152, margin: '0 auto', padding: '0 24px' }}>
@@ -1244,30 +1372,34 @@ function WalletGrid() {
         </div>
 
         {/* Wallet Cards */}
-        <div style={{ display: 'grid', gridTemplateColumns: responsive(bp, '1fr', 'repeat(2, 1fr)', 'repeat(5, 1fr)'), gap: bp === 'mobile' ? 16 : 24 }}>
-          {wallets.map(wallet => (
-            <CardHover key={wallet.id} style={{ padding: 20, cursor: 'pointer' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: responsive(bp, '1fr', 'repeat(2, minmax(0, 1fr))', 'repeat(5, minmax(0, 1fr))'), gridAutoRows: '1fr', gap: bp === 'mobile' ? 16 : 24 }}>
+          {registryWallets.map(wallet => (
+            <CardHover key={wallet.id} style={{ padding: 20, cursor: 'pointer', height: '100%', minWidth: 0, display: 'flex', flexDirection: 'column' }}>
               {/* Logo */}
               <div style={{ width: 56, height: 56, borderRadius: t.radius.lg, marginBottom: 16, overflow: 'hidden' }}>
-                <img src={wallet.logo} alt={`${wallet.name} logo`} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                <img src={WALLET_LOGOS[wallet.id] ?? wallet.icon} alt={`${wallet.name} logo`} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
               </div>
 
-              {/* Name & Badge */}
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-                <h3 style={{ fontSize: 20, fontWeight: 600, lineHeight: 1.4, color: t.fg, margin: 0 }}>{wallet.name}</h3>
-                <span style={{ ...badge.base, ...badge.verified }}>
+              {/* Name & Badge — flexWrap so a long single-word name (e.g.
+                  "WalletConnect") drops the badge to the next line instead of
+                  overflowing the card; badge never shrinks. Robust for any
+                  registry name length. */}
+              <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 8, marginBottom: 8 }}>
+                <h3 style={{ fontSize: 20, fontWeight: 600, lineHeight: 1.4, color: t.fg, margin: 0, minWidth: 0 }}>{wallet.name}</h3>
+                <span style={{ ...badge.base, ...badge.verified, flexShrink: 0 }}>
                   <VerifiedBadge /> Verified
                 </span>
               </div>
 
-              {/* Description */}
-              <p style={{ fontSize: 14, lineHeight: 1.5, color: t.slate500, marginBottom: 12, marginTop: 0 }}>
-                {wallet.desc}
+              {/* Description — flex:1 so the transport row pins to the bottom and
+                  all cards equalize height regardless of description length. */}
+              <p style={{ fontSize: 14, lineHeight: 1.5, color: t.slate500, marginBottom: 12, marginTop: 0, flex: 1 }}>
+                {cardDescription(wallet)}
               </p>
 
               {/* Transport */}
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                <span style={{ fontSize: 12, color: t.slate400 }}>{wallet.transport}</span>
+                <span style={{ fontSize: 12, color: t.slate400 }}>{transportLabel(wallet)}</span>
               </div>
             </CardHover>
           ))}
@@ -1522,6 +1654,12 @@ function DemoCTA({ onConnect }: { onConnect: () => void }) {
                 </svg>
                 Connect Wallet
               </button>
+
+              {/* Live session indicator — shown here, in the interactive demo, only
+                  while connected (where developers exercise the session features). */}
+              <div style={{ marginTop: 16, display: 'flex', justifyContent: 'center' }}>
+                <SessionIndicator />
+              </div>
 
               <p style={{ marginTop: 16, fontSize: 12, color: t.slate400 }}>
                 Select a wallet, see the connecting animation, and get a success confirmation
@@ -1780,36 +1918,37 @@ function LandingContent() {
   );
 }
 
-/* ─── Loading Skeleton (shown during SSR + hydration) ─────────────────── */
-
-function LoadingSkeleton() {
-  return (
-    <div style={{
-      minHeight: '100vh', display: 'flex', flexDirection: 'column',
-      alignItems: 'center', justifyContent: 'center', gap: 16,
-      background: '#FFFFFF', fontFamily: t.font,
-    }}>
-      <img src="/favicon-new.svg" alt="" width={48} height={48} style={{ opacity: 0.7 }} />
-      <div style={{
-        width: 32, height: 32, border: `3px solid ${t.muted2}`,
-        borderTopColor: t.brand500, borderRadius: '50%',
-        animation: 'plSpin .7s linear infinite',
-      }} />
-      <style>{`@keyframes plSpin { to { transform: rotate(360deg); } }`}</style>
-    </div>
-  );
-}
+// Apex session config. Only NON-DEFAULT options are set:
+//   • reconnect — exponential-backoff reconnect on transient drops (the store
+//     default is DISABLED).
+//   • broadcast — multi-tab session sync (the store default is OFF).
+// storage + persistSnapshot are intentionally OMITTED: the 1.0 capability-detected
+// default already yields encrypted IndexedDB in the browser and in-memory on the
+// server (Node/SSR), so the apex prerenders cleanly with no storage probing — and
+// the Kit's pre-1.0 localStorage-marker sweep only runs when no explicit storage is
+// pinned. Module-level constant → referentially stable (the Kit rebuilds the store
+// when sessionOptions changes identity), so no useMemo needed.
+const APEX_SESSION_OPTIONS: Partial<SessionStoreOptions> = {
+  reconnect: DEFAULT_RETRY_POLICY,
+  broadcast: true,
+};
 
 export default function Home() {
-  const [mounted, setMounted] = useState(false);
-  useEffect(() => { setMounted(true); }, []);
-
-  // Show loading skeleton until client-side JS hydrates.
-  // PartyLayerKit needs browser APIs (window.canton.*) so we can't render it on server.
-  if (!mounted) return <LoadingSkeleton />;
-
+  // No mount gate: PartyLayerKit renders server-side in its disconnected state
+  // (session restore runs in a mount effect, not during render — so the first
+  // client render matches the server's disconnected paint, no hydration mismatch).
+  // This lets the apex (H1, hero, all static copy) paint from the server for SEO,
+  // and removes the prior loading-skeleton flash.
   return (
-    <PartyLayerKit network="devnet" appName="PartyLayer" walletIcons={WALLET_LOGOS}>
+    <PartyLayerKit
+      network="devnet"
+      appName="PartyLayer"
+      walletIcons={WALLET_LOGOS}
+      walletOrder={CANONICAL_WALLET_ORDER}
+      adapters={buildDemoAdapters()}
+      registryUrl="/registry"
+      sessionOptions={APEX_SESSION_OPTIONS}
+    >
       <LandingContent />
     </PartyLayerKit>
   );

@@ -26,7 +26,7 @@ import { loop } from '@fivenorth/loop-sdk';
 ### Option 2: Script Tag
 
 ```html
-<script src="https://unpkg.com/@fivenorth/loop-sdk@0.8.0/dist"></script>
+<script src="https://unpkg.com/@fivenorth/loop-sdk@0.10.0/dist"></script>
 ```
 
 ## Usage
@@ -59,17 +59,32 @@ const session = await client.connect({ walletId: 'loop' });
 ## Capabilities
 
 Loop Wallet supports:
-- ✅ Connect/Disconnect
-- ✅ Sign Message
-- ✅ Submit Transaction (signs and submits in one call)
-- ✅ Events
-- ✅ Popup (QR code flow)
+- Connect/Disconnect
+- Sign Message
+- Submit Transaction (signs and submits in one call)
+- Ledger API (partial — ACS queries and command submission)
+- Events
+- Popup (QR code flow)
 
-**Note**: Loop SDK combines signing and submission. `signTransaction()` is not supported - use `submitTransaction()` instead.
+**Note**: Loop SDK combines signing and submission. `signTransaction()` is not supported — use `submitTransaction()` instead.
+
+### Ledger API Support
+
+Loop supports a subset of Canton Ledger API endpoints via its native SDK methods:
+
+| Endpoint | Supported | Loop SDK Method |
+|---|---|---|
+| `POST /v2/state/acs` | Yes | `getActiveContracts()` |
+| `POST /v2/state/active-contracts` | Yes | `getActiveContracts()` |
+| `POST /v2/commands/submit` | Yes | `submitTransaction()` |
+| `POST /v2/commands/submit-and-wait` | Yes | `submitAndWaitForTransaction()` |
+| Other endpoints | No | Throws `CapabilityNotSupportedError` |
+
+This covers the most common use cases: querying token balances (ACS) and submitting commands. For full Ledger API access (events, packages, parties, etc.), use Console, Nightly, or Bron wallet.
 
 ## Limitations
 
-- **Session Restoration**: Loop sessions are ephemeral and cannot be restored. Users must reconnect via QR code after page refresh.
+- **Session Restoration**: Supported, but conditional. `restore()` calls Loop's `autoConnect()`, which reconnects when a valid auth token is still in `localStorage`. If the token is missing or expired, the user must reconnect via QR code.
 - **Sign Transaction Only**: Loop SDK doesn't expose separate signing - use `submitTransaction()` which signs and submits.
 - **Network Switching**: Not supported. Requires reconnection.
 - **Multi-Party**: Not supported.
@@ -128,10 +143,10 @@ Party ID is obtained from `provider.party_id` after successful connection. This 
 
 ## Reconnect Required
 
-Since Loop doesn't support session restoration, users must reconnect after:
-- Page refresh
-- Browser restart
-- Session expiration
+Loop restores automatically via `autoConnect()` when a valid auth token is present. A user must reconnect (via QR code) when:
+- The stored auth token has expired
+- The browser storage was cleared
+- `autoConnect()` does not complete within the restore timeout
 
 The demo app should clearly indicate when reconnect is required.
 

@@ -1,15 +1,17 @@
+'use client';
+
 /**
- * ConnectButton — Premium wallet connection button for Canton dApps.
+ * ConnectButton: Premium wallet connection button for Canton dApps.
  *
  * Manages the full lifecycle: disconnect → connect (via WalletModal) → connected state.
  * Uses existing hooks (useSession, useConnect, useDisconnect) under the hood.
  *
- * Designed for dApp developers to embed directly — brand-aligned, accessible,
+ * Designed for dApp developers to embed directly: brand-aligned, accessible,
  * and polished across light/dark themes.
  */
 
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { useSession, useConnect, useDisconnect } from './hooks';
+import { useClientSession, useConnect, useDisconnect } from './hooks';
 import { useTheme } from './theme';
 import { WalletModal } from './modal';
 
@@ -79,7 +81,7 @@ export function ConnectButton({
   style,
   showDisconnect = true,
 }: ConnectButtonProps) {
-  const session = useSession();
+  const session = useClientSession();
   const { isConnecting } = useConnect();
   const { disconnect } = useDisconnect();
   const theme = useTheme();

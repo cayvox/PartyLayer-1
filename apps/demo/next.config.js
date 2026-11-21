@@ -3,6 +3,8 @@ const path = require('path');
 
 const nextConfig = {
   reactStrictMode: true,
+  // Produce a self-contained standalone server bundle for host-node deployment.
+  output: 'standalone',
   transpilePackages: [
     '@partylayer/react',
     '@partylayer/sdk',
@@ -18,6 +20,9 @@ const nextConfig = {
   // Ensure ESM packages work correctly
   experimental: {
     esmExternals: 'loose',
+    // Monorepo root so standalone file-tracing includes the workspace
+    // @partylayer/* packages that live above apps/demo.
+    outputFileTracingRoot: path.resolve(__dirname, '../../'),
   },
   // Webpack configuration to resolve workspace packages
   webpack: (config, { isServer, dev }) => {
@@ -29,7 +34,9 @@ const nextConfig = {
     // Resolve workspace packages
     config.resolve.alias = {
       ...config.resolve.alias,
-      '@partylayer/react': path.resolve(__dirname, '../../packages/react'),
+      // Exact-match ($) so bare `@partylayer/react` resolves here as before, while
+      // subpaths like `@partylayer/react/query` fall through to the package exports.
+      '@partylayer/react$': path.resolve(__dirname, '../../packages/react'),
       '@partylayer/sdk': path.resolve(__dirname, '../../packages/sdk'),
       '@partylayer/core': path.resolve(__dirname, '../../packages/core'),
       '@partylayer/registry-client': path.resolve(__dirname, '../../packages/registry-client'),

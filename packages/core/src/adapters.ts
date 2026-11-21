@@ -27,6 +27,7 @@ import type {
 import {
   CapabilityNotSupportedError,
   WalletNotInstalledError,
+  TransportError,
 } from './errors';
 
 /**
@@ -80,15 +81,94 @@ export interface SubmitTransactionParams {
 }
 
 /**
- * Ledger API proxy parameters (CIP-0103 ledgerApi method)
+ * Method verb accepted at the SDK boundary for {@link LedgerApiParams}. A
+ * friendly superset: both cases are accepted because wallets diverge (Send's
+ * schema requires lower-case; CIP-0103 providers use upper-case). Each adapter
+ * normalizes the case to what its wallet requires — see {@link normalizeLedgerMethodUpper}.
+ */
+export type LedgerApiMethod =
+  | 'GET'
+  | 'POST'
+  | 'PUT'
+  | 'DELETE'
+  | 'PATCH'
+  | 'get'
+  | 'post'
+  | 'put'
+  | 'delete'
+  | 'patch';
+
+/**
+ * Ledger API proxy parameters (CIP-0103 ledgerApi method).
+ *
+ * This is a friendly superset so ONE call works across all wallets: the case of
+ * `requestMethod` is normalized per-adapter, and `body` may be a JSON string OR
+ * a plain object — each adapter coerces it to the shape its wallet requires
+ * (Send wants an object; CIP-0103 providers / Loop want a JSON string).
  */
 export interface LedgerApiParams {
-  /** HTTP method for the JSON Ledger API */
-  requestMethod: 'GET' | 'POST' | 'PUT' | 'DELETE';
-  /** Resource path (e.g., "/v1/state/acs") */
+  /** HTTP method for the JSON Ledger API (case normalized per-adapter). */
+  requestMethod: LedgerApiMethod;
+  /** Resource path (e.g., "/v2/state/active-contracts"). */
   resource: string;
-  /** Optional JSON body */
-  body?: string;
+  /** Optional JSON body — a JSON string OR a plain object (coerced per-adapter). */
+  body?: string | Record<string, unknown>;
+}
+
+/**
+ * Normalize a {@link LedgerApiParams} verb to LOWER-case — the canonical
+ * CIP-0103 dApp API form (splice-wallet-kernel `LedgerApiRequest.requestMethod`
+ * is the enum `["get","post","patch","put","delete"]`). Every `window.canton`
+ * CIP-0103 RPC wallet (Send / Console / Nightly / WalletConnect / the announce
+ * bridge) expects this.
+ */
+export function normalizeLedgerMethodLower(
+  method: LedgerApiMethod,
+): 'get' | 'post' | 'patch' | 'put' | 'delete' {
+  return method.toLowerCase() as 'get' | 'post' | 'patch' | 'put' | 'delete';
+}
+
+/**
+ * Coerce a {@link LedgerApiParams} body to a plain OBJECT (or `undefined`) — the
+ * canonical CIP-0103 dApp API form (`LedgerApiRequest.body` is
+ * `{ type: 'object' }`). An object passes through; a JSON string is parsed; a
+ * non-JSON-parseable string throws.
+ */
+export function ledgerApiBodyToObject(
+  body: string | Record<string, unknown> | undefined,
+): Record<string, unknown> | undefined {
+  if (body == null) return undefined;
+  if (typeof body !== 'string') return body;
+  try {
+    return JSON.parse(body) as Record<string, unknown>;
+  } catch {
+    throw new TransportError(
+      'ledgerApi body must be a JSON object (or JSON-parseable string) for a CIP-0103 wallet',
+    );
+  }
+}
+
+/**
+ * Normalize a {@link LedgerApiParams} verb to upper-case. Retained for the Bron
+ * REST proxy (case-insensitive HTTP JSON API) — NOT a CIP-0103 RPC wallet; the
+ * CIP-0103 wallets use {@link normalizeLedgerMethodLower}.
+ */
+export function normalizeLedgerMethodUpper(
+  method: LedgerApiMethod,
+): 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH' {
+  return method.toUpperCase() as 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH';
+}
+
+/**
+ * Coerce a {@link LedgerApiParams} body to a JSON string (or `undefined`) — the
+ * form Loop's handlers and the Bron REST proxy expect. An object is
+ * `JSON.stringify`-d; a string passes through verbatim.
+ */
+export function ledgerApiBodyToString(
+  body: string | Record<string, unknown> | undefined,
+): string | undefined {
+  if (body == null) return undefined;
+  return typeof body === 'string' ? body : JSON.stringify(body);
 }
 
 /**
@@ -247,6 +327,15 @@ export interface WalletAdapter {
     opts?: {
       timeoutMs?: number;
       partyId?: PartyId;
+      /** When false, prefer remote/mobile transport over installed extension */
+      preferInstalled?: boolean;
+      /**
+       * Called with a pairing/display URI (e.g. a WalletConnect `wc:` URI) as
+       * soon as the adapter produces one, before the user approves. Lets the
+       * connect UI render a QR / deep-link itself. Adapters that have no such
+       * URI (their own SDK shows the QR) simply never call it.
+       */
+      onDisplayUri?: (uri: string) => void;
     }
   ): Promise<AdapterConnectResult>;
 
@@ -325,6 +414,141 @@ export interface WalletAdapter {
     event: AdapterEventName,
     handler: (payload: unknown) => void
   ): () => void;
+}
+
+/**
+ * Structural ("duck-type") match for the official
+ * `@canton-network/core-wallet-discovery` `ProviderAdapter` shape.
+ *
+ * We deliberately do NOT import `@canton-network/*` (mirroring the stance in
+ * `@partylayer/provider`'s extension-channel) — the standard's SHAPE is the
+ * contract, not its package. An app supplies a concrete instance (e.g.
+ * `new WalleyAdapter()`) and the SDK bridges it generically via
+ * `GenericDiscoveryAdapter`, so a popup/remote wallet that neither injects
+ * `window.canton` nor announces can still be hosted by the generic layer with
+ * NO wallet-specific adapter package. Any standards-compliant wallet shipping
+ * this shape inherits the capability.
+ *
+ * `provider()` returns a `CIP0103Provider` (the official `Provider<RpcTypes>`
+ * already exposes `request`/`on`/`emit`/`removeListener`); the host/network are
+ * baked into the app-supplied adapter at construction, so the bridge never sees
+ * or sets them.
+ */
+/**
+ * The provider surface returned by an {@link OfficialProviderAdapter} —
+ * `request` + the EventEmitter trio (`on`/`emit`/`removeListener`).
+ *
+ * Intentionally LOOSE (`any`-typed args): the official `@canton-network`
+ * `Provider<RpcTypes>` types `request` as generic over its OWN method literals
+ * (`request<M extends keyof RpcTypes>(args: RequestArgs<RpcTypes, M>)`), which
+ * is NOT structurally assignable to our string-method `CIP0103Provider.request`
+ * — even though it's call-compatible at runtime (the bridge only ever calls
+ * `request({ method, params })`). Loosening the args lets a real official
+ * adapter satisfy this shape; the bridge treats it as a `CIP0103Provider` at the
+ * call site. Without this, consumers couldn't pass e.g. `new WalleyAdapter()`
+ * without a cast.
+ */
+/* eslint-disable @typescript-eslint/no-explicit-any */
+export interface OfficialProvider {
+  request(args: any): Promise<any>;
+  on(event: string, listener: (...args: any[]) => void): unknown;
+  emit(event: string, ...args: any[]): boolean;
+  removeListener(event: string, listener: (...args: any[]) => void): unknown;
+}
+/* eslint-enable @typescript-eslint/no-explicit-any */
+
+export interface OfficialProviderAdapter {
+  /** Stable provider identity (e.g. "walley"). */
+  readonly providerId: string;
+  /** Display name (e.g. "Walley"). */
+  readonly name: string;
+  /** Provider transport kind, if surfaced ('browser' | 'desktop' | 'mobile' | 'remote'). */
+  readonly type?: string;
+  /** Branding icon (URL or data URI), if surfaced. */
+  readonly icon?: string;
+  /** Install/availability probe — popup-free. */
+  detect(): Promise<boolean>;
+  /** The live provider (request + on/emit/removeListener). */
+  provider(): OfficialProvider;
+  /** Optional session restore (returns a restored provider, or null). */
+  restore?(): Promise<OfficialProvider | null>;
+  /** Optional teardown. */
+  teardown?(): void;
+}
+
+/**
+ * Structural guard for {@link OfficialProviderAdapter}. Checks only the
+ * required surface (`providerId` string + `detect`/`provider` functions); the
+ * returned `provider()` value is separately validated against the
+ * `CIP0103Provider` duck-type by the consumer.
+ */
+export function isOfficialProviderAdapter(
+  value: unknown,
+): value is OfficialProviderAdapter {
+  if (typeof value !== 'object' || value === null) return false;
+  const a = value as Record<string, unknown>;
+  return (
+    typeof a.providerId === 'string' &&
+    a.providerId.length > 0 &&
+    typeof a.detect === 'function' &&
+    typeof a.provider === 'function'
+  );
+}
+
+/**
+ * Network→host mapping for a discovery-adapter wallet. This is DATA — it lives
+ * in the registry entry's `adapter.networkHosts` — so the generic bridge can
+ * resolve `networkHosts[activeNetwork]` with NO wallet URL hardcoded in SDK or
+ * app code. A developer writes `<PartyLayerKit network="mainnet">` and the host
+ * is looked up from the wallet's own entry.
+ *
+ * Partial: a wallet need not support every network (e.g. mainnet-only). A
+ * missing key is a CLEAR failure at connect (the unsupported network is named),
+ * never a silent wrong-network fallback.
+ */
+export type NetworkHosts = Partial<Record<NetworkId, string>>;
+
+/**
+ * Factory form of an official ProviderAdapter. Instead of a pre-constructed
+ * instance with a baked host, the app supplies `create(host)` so the bridge can
+ * construct the official adapter with a NETWORK-RESOLVED host at connect time.
+ *
+ * Why a factory and not re-hosting an instance: official adapters (e.g. Walley)
+ * seal `host` at construction (`private host`, no setter), so a pre-built
+ * instance cannot be re-pointed at another network's host. The factory is the
+ * only clean path to network-driven host resolution.
+ *
+ * `create(host)` MUST be synchronous and side-effect-light (just construct the
+ * adapter) — the bridge calls it on the popup-safe gesture path, so any awaited
+ * work before the wallet's `window.open` would break gesture survival. The host
+ * is pre-resolved during warm-up; `create` only builds the instance.
+ */
+export interface OfficialAdapterFactory {
+  /** Stable provider identity (e.g. "walley") — matches the registry entry id / `config.providerId`. */
+  readonly providerId: string;
+  /** Construct the official adapter bound to `host`. Synchronous; no awaited work. */
+  create(host: string): OfficialProviderAdapter;
+  /** Display-name override (else the constructed adapter's `name`). */
+  readonly name?: string;
+  /** Icon override (else the constructed adapter's `icon`). */
+  readonly icon?: string;
+}
+
+/**
+ * Structural guard for {@link OfficialAdapterFactory}. Distinguishes the factory
+ * form (`create` function) from a pre-constructed {@link OfficialProviderAdapter}
+ * instance (`provider` function) in `config.adapters`.
+ */
+export function isOfficialAdapterFactory(
+  value: unknown,
+): value is OfficialAdapterFactory {
+  if (typeof value !== 'object' || value === null) return false;
+  const a = value as Record<string, unknown>;
+  return (
+    typeof a.providerId === 'string' &&
+    a.providerId.length > 0 &&
+    typeof a.create === 'function'
+  );
 }
 
 /**

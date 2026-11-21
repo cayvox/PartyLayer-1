@@ -1,6 +1,6 @@
 {
   "name": "@partylayer/registry-client",
-  "version": "0.2.5",
+  "version": "0.5.2",
   "description": "Wallet registry client for PartyLayer",
   "main": "./dist/index.js",
   "module": "./dist/index.mjs",
@@ -39,7 +39,7 @@
     "url": "https://github.com/PartyLayer/PartyLayer/issues"
   },
   "dependencies": {
-    "@partylayer/core": "workspace:*"
+    "@partylayer/core": "workspace:^"
   },
   "devDependencies": {
     "@types/node": "^20.11.0",

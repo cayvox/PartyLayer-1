@@ -1,6 +1,6 @@
 {
   "name": "@partylayer/adapter-console",
-  "version": "0.2.4",
+  "version": "0.3.13",
   "description": "Console Wallet adapter for PartyLayer",
   "main": "./dist/index.js",
   "module": "./dist/index.mjs",
@@ -39,8 +39,8 @@
     "url": "https://github.com/PartyLayer/PartyLayer/issues"
   },
   "dependencies": {
-    "@console-wallet/dapp-sdk": "^2.0.0",
-    "@partylayer/core": "workspace:*"
+    "@console-wallet/dapp-sdk": "^2.1.5",
+    "@partylayer/core": "workspace:^"
   },
   "devDependencies": {
     "@types/node": "^20.11.0",

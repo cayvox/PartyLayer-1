@@ -1,15 +1,19 @@
 'use client';
 
 import { useDocs } from '../layout';
+// Generated from the wallet registry (registry/v1/stable/registry.json) by
+// scripts/gen-readme.mjs — `pnpm gate:readme` keeps this in sync. Table 1 below
+// renders from it so the built-in wallet list can never drift from the registry.
+import { GENERATED_WALLETS } from './wallets.generated';
 
 export default function WalletsPage() {
-  const { H1, H2, H3, P, Code, CodeBlock, PropsTable, Callout, PrevNext, Strong } = useDocs();
+  const { H1, H2, H3, P, Code, CodeBlock, PropsTable, Callout, PrevNext, Strong, UL, LI } = useDocs();
 
   return (
     <>
       <H1>Wallets & Adapters</H1>
       <P>
-        PartyLayer includes 5 built-in wallet adapters and supports custom adapters for any Canton wallet.
+        PartyLayer includes built-in wallet adapters and supports custom adapters for any Canton wallet.
         Wallets are discovered through the registry and CIP-0103 native provider detection.
       </P>
 
@@ -23,24 +27,18 @@ export default function WalletsPage() {
         }}>
           <thead>
             <tr style={{ background: '#F5F6F8' }}>
-              {['Wallet', 'Transport', 'Detection', 'Auto-registered'].map(h => (
+              {['Wallet', 'Networks', 'Opt-in', 'Adapter'].map(h => (
                 <th key={h} style={{ textAlign: 'left', padding: '10px 14px', fontWeight: 600, color: '#0B0F1A', borderBottom: '1px solid rgba(15,23,42,0.10)', fontSize: 13 }}>{h}</th>
               ))}
             </tr>
           </thead>
           <tbody>
-            {[
-              { name: 'Console Wallet', transport: 'PostMessage', detection: 'Browser extension', auto: 'Yes' },
-              { name: '5N Loop', transport: 'QR Code / Popup', detection: 'Mobile / Web app', auto: 'Yes' },
-              { name: 'Cantor8 (C8)', transport: 'Deep Link', detection: 'Browser extension', auto: 'Yes' },
-              { name: 'Nightly', transport: 'Injected', detection: 'window.nightly.canton', auto: 'Yes' },
-              { name: 'Bron', transport: 'OAuth', detection: 'Enterprise config', auto: 'No' },
-            ].map(w => (
-              <tr key={w.name} style={{ borderBottom: '1px solid rgba(15,23,42,0.10)' }}>
+            {GENERATED_WALLETS.map(w => (
+              <tr key={w.id} style={{ borderBottom: '1px solid rgba(15,23,42,0.10)' }}>
                 <td style={{ padding: '10px 14px', fontWeight: 500, color: '#0B0F1A' }}>{w.name}</td>
-                <td style={{ padding: '10px 14px', color: '#64748B' }}>{w.transport}</td>
-                <td style={{ padding: '10px 14px', color: '#64748B', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: 12.5 }}>{w.detection}</td>
-                <td style={{ padding: '10px 14px', color: w.auto === 'Yes' ? '#166534' : '#92400E', fontWeight: 500 }}>{w.auto}</td>
+                <td style={{ padding: '10px 14px', color: '#64748B' }}>{w.networks.join(', ')}</td>
+                <td style={{ padding: '10px 14px', color: w.optIn ? '#92400E' : '#166534', fontWeight: 500 }}>{w.optIn ? 'Yes' : 'No'}</td>
+                <td style={{ padding: '10px 14px', color: '#64748B', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: 12.5 }}>{w.adapter}</td>
               </tr>
             ))}
           </tbody>
@@ -48,9 +46,100 @@ export default function WalletsPage() {
       </div>
 
       <Callout type="note">
-        All wallets except <Strong>Bron</Strong> are auto-registered when using <Code>{'PartyLayerKit'}</Code>.
-        Bron requires explicit configuration because it needs an OAuth client ID.
+        Wallets marked <Strong>Opt-in</Strong> (<Strong>Bron</Strong>, <Strong>WalletConnect</Strong>) require explicit
+        configuration — register them via <Code>{'config.adapters'}</Code> (Bron needs an OAuth client ID;
+        WalletConnect needs the optional <Code>{'@walletconnect/*'}</Code> peers). The rest are auto-registered
+        when using <Code>{'PartyLayerKit'}</Code>.
       </Callout>
+
+      <H2 id="capability-matrix">Capability Matrix</H2>
+      <P>
+        Not every wallet supports every operation. Check this matrix before building features
+        that depend on specific capabilities.
+      </P>
+
+      <div style={{ overflowX: 'auto', marginBottom: 24 }}>
+        <table style={{
+          width: '100%', borderCollapse: 'collapse', fontSize: 14,
+          fontFamily: 'ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif',
+          border: '1px solid rgba(15,23,42,0.10)', borderRadius: 10, overflow: 'hidden',
+        }}>
+          <thead>
+            <tr style={{ background: '#F5F6F8' }}>
+              {['Wallet', 'connect', 'signMessage', 'signTransaction', 'submitTransaction', 'ledgerApi', 'restore'].map(h => (
+                <th key={h} style={{ textAlign: 'left', padding: '10px 14px', fontWeight: 600, color: '#0B0F1A', borderBottom: '1px solid rgba(15,23,42,0.10)', fontSize: 13 }}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {[
+              { name: 'Console', connect: true, signMessage: true, signTransaction: true, submitTransaction: true, ledgerApi: 'full', restore: true },
+              { name: '5N Loop', connect: true, signMessage: true, signTransaction: false, submitTransaction: true, ledgerApi: 'limited', restore: true },
+              { name: 'Cantor8', connect: true, signMessage: true, signTransaction: true, submitTransaction: false, ledgerApi: 'none', restore: true },
+              { name: 'Nightly', connect: true, signMessage: true, signTransaction: false, submitTransaction: true, ledgerApi: 'full', restore: true },
+              { name: 'Bron', connect: true, signMessage: true, signTransaction: true, submitTransaction: false, ledgerApi: 'full', restore: true },
+              { name: 'Send', connect: true, signMessage: true, signTransaction: false, submitTransaction: true, ledgerApi: 'full', restore: true },
+              { name: 'Walley', connect: true, signMessage: true, signTransaction: false, submitTransaction: true, ledgerApi: 'none', restore: true },
+              { name: 'WalletConnect', connect: true, signMessage: true, signTransaction: false, submitTransaction: true, ledgerApi: 'full', restore: true },
+            ].map(w => (
+              <tr key={w.name} style={{ borderBottom: '1px solid rgba(15,23,42,0.10)' }}>
+                <td style={{ padding: '10px 14px', fontWeight: 500, color: '#0B0F1A' }}>{w.name}</td>
+                {['connect', 'signMessage', 'signTransaction', 'submitTransaction'].map(cap => {
+                  const val = w[cap as keyof typeof w] as boolean;
+                  return (
+                    <td key={cap} style={{ padding: '10px 14px', textAlign: 'center' }}>
+                      {val ? <span title="Supported" style={{ color: '#166534' }}>{'supported'}</span> : <span title="Not supported" style={{ color: '#991B1B' }}>{'none'}</span>}
+                    </td>
+                  );
+                })}
+                <td style={{ padding: '10px 14px', textAlign: 'center' }}>
+                  {w.ledgerApi === 'full' && <span style={{ color: '#166534' }}>{'full'}</span>}
+                  {w.ledgerApi === 'limited' && <span style={{ color: '#92400E' }}>{'limited'}</span>}
+                  {w.ledgerApi === 'none' && <span style={{ color: '#991B1B' }}>{'none'}</span>}
+                </td>
+                <td style={{ padding: '10px 14px', textAlign: 'center' }}>
+                  {w.restore ? <span style={{ color: '#166534' }}>{'supported'}</span> : <span style={{ color: '#991B1B' }}>{'none'}</span>}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      <H3 id="capability-notes">Capability Notes</H3>
+      <UL>
+        <LI><Strong>Loop / Nightly / Send — signTransaction:</Strong> these wallets combine signing
+          and submission into a single step. Use <Code>{'submitTransaction'}</Code> directly instead
+          of the separate sign-then-submit pattern. Calling <Code>{'signTransaction'}</Code> on any of
+          them throws <Code>{'CapabilityNotSupportedError'}</Code> pointing you at this fix.</LI>
+        <LI><Strong>Send — passkey signing &amp; namespace guard:</Strong> Send injects at the bare{' '}
+          <Code>{'window.canton'}</Code> slot (the same slot any splice-wallet-kernel-compatible
+          extension would use). The Send adapter verifies the running provider{"'"}s{' '}
+          <Code>{'kernel.id'}</Code> before forwarding any RPC, so installing Send next to a
+          Console-class wallet never claims the wrong provider. Send is currently <Strong>mainnet-only</Strong>{' '}
+          and signs every transaction via WebAuthn-PRF (Touch ID / Face ID), so the user sees a
+          passkey prompt rather than an extension popup.</LI>
+        <LI><Strong>Loop — ledgerApi (limited):</Strong> Supports <Code>{'POST /v2/state/acs'}</Code>,{' '}
+          <Code>{'GET /v2/state/acs/active-contracts'}</Code>, <Code>{'POST /v2/commands/submit'}</Code>,{' '}
+          and <Code>{'POST /v2/commands/submit-and-wait'}</Code>. Other endpoints are not available —
+          for full Ledger API access, use Console, Nightly, or Bron.</LI>
+        <LI><Strong>Cantor8:</Strong> Mobile-only deep link transport. Supports <Code>{'signMessage'}</Code>{' '}
+          and <Code>{'signTransaction'}</Code> via the deep link flow, but does not expose{' '}
+          <Code>{'submitTransaction'}</Code> or <Code>{'ledgerApi'}</Code>.</LI>
+        <LI><Strong>Bron — submitTransaction:</Strong> Bron is a remote signer (OAuth) — it signs commands
+          but does not submit them directly to the ledger. Pair{' '}
+          <Code>{'signTransaction'}</Code> with your own participant submission, or call{' '}
+          <Code>{'ledgerApi'}</Code> against <Code>{'/v2/commands/submit-and-wait'}</Code> and let Bron sign
+          the pre-built command. Requires explicit OAuth configuration via{' '}
+          <Code>{'BronAdapter'}</Code> with <Code>{'auth'}</Code> and <Code>{'api'}</Code> config.</LI>
+        <LI><Strong>Session restore (all five wallets):</Strong> every adapter declares the{' '}
+          <Code>{'restore'}</Code> capability and implements a matching{' '}
+          <Code>{'restore()'}</Code> method. On page reload, the SDK decrypts the persisted
+          session and hands it to the adapter, which re-establishes the provider if it can.
+          See <a href="/docs/advanced#session-persistence" style={{ color: '#E6B800' }}>
+            Advanced → Session Persistence
+          </a> for per-wallet behavior and edge cases.</LI>
+      </UL>
 
       <H2 id="adding-bron">Adding Bron (Enterprise)</H2>
       <CodeBlock language="tsx">{`import { PartyLayerKit } from '@partylayer/react';
@@ -63,9 +152,16 @@ import { BronAdapter } from '@partylayer/adapter-bron';
   adapters={[
     ...getBuiltinAdapters(),
     new BronAdapter({
-      clientId: 'your-oauth-client-id',
-      // Optional: custom OAuth redirect URI
-      // redirectUri: 'https://my-app.com/callback',
+      auth: {
+        clientId: 'your-oauth-client-id',
+        redirectUri: 'https://my-app.com/callback',
+        authorizationUrl: 'https://auth.bron.example/authorize',
+        tokenUrl: 'https://auth.bron.example/token',
+      },
+      api: {
+        baseUrl: 'https://api.bron.example',
+        getAccessToken: async () => getStoredAccessToken(),
+      },
     }),
   ]}
 >`}</CodeBlock>

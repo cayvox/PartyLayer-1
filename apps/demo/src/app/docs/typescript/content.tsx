@@ -115,7 +115,7 @@ const partyId = 'party::abc123' as PartyId;`}</CodeBlock>
   stale: boolean;                // Whether data may be outdated
   fetchedAt: number;             // Timestamp of last fetch
   etag?: string;                 // HTTP ETag for caching
-  error?: Error;                 // Error if fetch failed
+  error?: PartyLayerError;       // Error if fetch failed
 }`}</CodeBlock>
 
       <H2 id="capabilities">Capability Keys</H2>
@@ -147,6 +147,7 @@ const partyId = 'party::abc123' as PartyId;`}</CodeBlock>
       <H2 id="error-code">ErrorCode</H2>
       <CodeBlock language="typescript">{`type ErrorCode =
   | 'WALLET_NOT_FOUND'
+  | 'ADAPTER_NOT_REGISTERED'
   | 'WALLET_NOT_INSTALLED'
   | 'USER_REJECTED'
   | 'ORIGIN_NOT_ALLOWED'
@@ -157,6 +158,7 @@ const partyId = 'party::abc123' as PartyId;`}</CodeBlock>
   | 'REGISTRY_VERIFICATION_FAILED'
   | 'REGISTRY_SCHEMA_INVALID'
   | 'INTERNAL_ERROR'
+  | 'NETWORK_MISMATCH'
   | 'TIMEOUT';`}</CodeBlock>
 
       <H2 id="event-types">Event Types</H2>
@@ -200,7 +202,7 @@ interface ErrorEvent {
 
       <H2 id="cip0103-types">CIP-0103 Types</H2>
       <P>
-        For the full CIP-0103 type definitions (27 types including <Code>{'CIP0103Provider'}</Code>,
+        For the full CIP-0103 type definitions (23 types including <Code>{'CIP0103Provider'}</Code>,
         {' '}<Code>{'CIP0103Account'}</Code>, <Code>{'CIP0103StatusEvent'}</Code>, <Code>{'CIP0103TxChangedEvent'}</Code>,
         etc.), see the <A href="/docs/cip-0103">CIP-0103 Provider</A> documentation.
       </P>

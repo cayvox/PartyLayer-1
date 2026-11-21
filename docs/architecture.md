@@ -146,14 +146,15 @@ React hooks, components, and theming for easy integration.
 
 **Components:**
 - `PartyLayerKit`: Zero-config wrapper (creates client, registers adapters, discovers wallets, provides theme)
-- `ConnectButton`: RainbowKit-style connect button with wallet modal and connected dropdown
+- `ConnectButton`: Polished connect button with wallet modal and connected dropdown
 - `WalletModal`: Multi-state wallet selection modal (list, connecting, success, error, not-installed views)
 - `PartyLayerProvider`: Lower-level context provider for advanced use cases
 - `ThemeProvider`: Theme context provider (light/dark/auto)
 
 **Hooks:**
 - `usePartyLayer()`: Access SDK client instance
-- `useSession()`: Get active session
+- `useSession()`: Reactive session state + actions (`UseSessionReturn`); legacy getter preserved as `useClientSession()` (deprecated)
+- `useAccount()`: Reactive `{ party, account, status, networkId, isConnected, … }`
 - `useWallets()`: Get available wallets (registry + native CIP-0103)
 - `useConnect()`: Connect hook with loading/error state
 - `useDisconnect()`: Disconnect hook
@@ -283,7 +284,7 @@ The wallet registry is a versioned JSON document:
       "id": "console",
       "name": "Console Wallet",
       "description": "Official Console Wallet",
-      "homepage": "https://console.digitalasset.com",
+      "homepage": "https://consolewallet.io",
       "icon": "https://...",
       "supportedNetworks": ["mainnet", "devnet", "local"],
       "capabilities": {
@@ -317,9 +318,8 @@ The wallet registry is a versioned JSON document:
 
 - `WalletNotFoundError`: Wallet not in registry
 - `WalletNotInstalledError`: Wallet not installed in browser
-- `ConnectionRejectedError`: User rejected connection
+- `UserRejectedError`: User rejected the connection or signing operation
 - `SessionExpiredError`: Session has expired
-- `UserRejectedError`: User rejected signing operation
 - `TransportError`: Communication error with wallet
 - `TimeoutError`: Operation timed out
 

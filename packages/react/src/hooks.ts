@@ -1,3 +1,5 @@
+'use client';
+
 /**
  * React hooks for PartyLayer
  */
@@ -11,6 +13,8 @@ import type {
   SignMessageParams,
   SignTransactionParams,
   SubmitTransactionParams,
+  LedgerApiParams,
+  LedgerApiResult,
   ConnectOptions,
   RegistryStatus,
 } from '@partylayer/sdk';
@@ -36,9 +40,14 @@ export function useWallets() {
 }
 
 /**
- * Hook to get active session
+ * Hook to get the active SDK-layer session object.
+ *
+ * @deprecated Renamed from `useSession`. `useSession()` is now the reactive
+ * session-store hook (`UseSessionReturn`); this legacy SDK-layer getter is
+ * preserved VERBATIM under `useClientSession()`.
+ * Migrate `useSession()` → `useClientSession()` if you want the old getter.
  */
-export function useSession() {
+export function useClientSession() {
   const { session } = usePartyLayerContext();
   return session;
 }
@@ -245,4 +254,33 @@ export function useSubmitTransaction() {
   );
 
   return { submitTransaction, isSubmitting, error };
+}
+
+/**
+ * Hook to call the Ledger API through the connected wallet
+ */
+export function useLedgerApi() {
+  const client = usePartyLayer();
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<Error | null>(null);
+
+  const ledgerApi = useCallback(
+    async (params: LedgerApiParams): Promise<LedgerApiResult | null> => {
+      setIsLoading(true);
+      setError(null);
+
+      try {
+        return await client.ledgerApi(params);
+      } catch (err) {
+        const error = err instanceof Error ? err : new Error('Ledger API call failed');
+        setError(error);
+        return null;
+      } finally {
+        setIsLoading(false);
+      }
+    },
+    [client]
+  );
+
+  return { ledgerApi, isLoading, error };
 }

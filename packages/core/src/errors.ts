@@ -13,6 +13,7 @@
  */
 export type ErrorCode =
   | 'WALLET_NOT_FOUND'
+  | 'ADAPTER_NOT_REGISTERED'
   | 'WALLET_NOT_INSTALLED'
   | 'USER_REJECTED'
   | 'ORIGIN_NOT_ALLOWED'
@@ -23,6 +24,7 @@ export type ErrorCode =
   | 'REGISTRY_VERIFICATION_FAILED'
   | 'REGISTRY_SCHEMA_INVALID'
   | 'INTERNAL_ERROR'
+  | 'NETWORK_MISMATCH'
   | 'TIMEOUT';
 
 /**
@@ -106,6 +108,35 @@ export class WalletNotFoundError extends PartyLayerError {
 }
 
 /**
+ * A popup/remote (`transport: 'discovery-adapter'`) wallet was requested by
+ * `walletId`, but its provider adapter — which the app supplies, not the SDK —
+ * was never registered. Distinct from {@link WalletNotFoundError}: the wallet IS
+ * a known registry entry, it's just not wired up. The message is actionable
+ * (how to register it) and is built generically from the registry entry, so it
+ * works for any discovery-adapter wallet. Higher-level UIs (e.g. PartyLayerKit)
+ * can `catch (e instanceof AdapterNotRegisteredError)` to surface wiring help.
+ */
+export class AdapterNotRegisteredError extends PartyLayerError {
+  constructor(
+    walletId: string,
+    info: { name?: string; providerId?: string; adapterPackage?: string } = {}
+  ) {
+    const providerId = info.providerId ?? walletId;
+    const label = info.name ? `"${info.name}" (${walletId})` : `"${walletId}"`;
+    const pkg = info.adapterPackage ? ` (provider from ${info.adapterPackage})` : '';
+    super(
+      `Wallet ${label} is a popup/remote (discovery-adapter) wallet — its provider is ` +
+        `supplied by your app, not bundled${pkg}. Register it with createPartyLayer: ` +
+        `adapters: [{ providerId: '${providerId}', create: (host) => /* new provider adapter */ }]. ` +
+        `See https://partylayer.xyz/docs/wallets`,
+      'ADAPTER_NOT_REGISTERED',
+      { details: { walletId, providerId } }
+    );
+    this.name = 'AdapterNotRegisteredError';
+  }
+}
+
+/**
  * Wallet not installed error
  */
 export class WalletNotInstalledError extends PartyLayerError {
@@ -158,6 +189,29 @@ export class SessionExpiredError extends PartyLayerError {
       details: { sessionId },
     });
     this.name = 'SessionExpiredError';
+  }
+}
+
+/**
+ * Network mismatch error — the connected wallet's effective network differs
+ * from the dApp's configured network. Thrown to block wrong-network connects
+ * (policy 'strict') and wrong-network transactions (policy 'guard' | 'strict').
+ */
+export class NetworkMismatchError extends PartyLayerError {
+  /** The dApp's configured (expected) network, CAIP-2 normalized. */
+  public readonly expected: string;
+  /** The wallet's reported (actual) network, CAIP-2 normalized. */
+  public readonly actual: string;
+
+  constructor(expected: string, actual: string) {
+    super(
+      `Wallet is on network "${actual}" but this app requires "${expected}". Switch your wallet's network, then reconnect.`,
+      'NETWORK_MISMATCH',
+      { details: { expected, actual } }
+    );
+    this.name = 'NetworkMismatchError';
+    this.expected = expected;
+    this.actual = actual;
   }
 }
 

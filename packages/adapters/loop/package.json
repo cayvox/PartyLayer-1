@@ -1,6 +1,6 @@
 {
   "name": "@partylayer/adapter-loop",
-  "version": "0.2.4",
+  "version": "0.3.14",
   "description": "5N Loop Wallet adapter for PartyLayer",
   "main": "./dist/index.js",
   "module": "./dist/index.mjs",
@@ -40,7 +40,7 @@
   },
   "dependencies": {
     "@fivenorth/loop-sdk": "^0.10.0",
-    "@partylayer/core": "workspace:*"
+    "@partylayer/core": "workspace:^"
   },
   "devDependencies": {
     "@types/node": "^20.11.0",

@@ -2,9 +2,9 @@
   "metadata": {
     "registryVersion": "1.0.0",
     "schemaVersion": "1.0.0",
-    "publishedAt": "2026-01-29T00:00:00Z",
+    "publishedAt": "2026-06-10T00:00:00Z",
     "channel": "beta",
-    "sequence": 3,
+    "sequence": 6,
     "publisher": "PartyLayer"
   },
   "wallets": [
@@ -12,8 +12,8 @@
       "id": "console",
       "name": "Console Wallet",
       "description": "Official Console Wallet for Canton Network",
-      "homepage": "https://console.digitalasset.com",
-      "icon": "https://console.digitalasset.com/icon.png",
+      "homepage": "https://consolewallet.io",
+      "icon": "https://registry.partylayer.xyz/wallets/console.svg",
       "supportedNetworks": ["devnet", "testnet", "mainnet"],
       "capabilities": {
         "signMessage": true,
@@ -29,14 +29,25 @@
       "installation": {
         "windowProperty": "consoleWallet"
       },
-      "sdkVersion": ">=0.1.0"
+      "sdkVersion": ">=0.1.0",
+      "providerDetection": {
+        "transport": "window.canton",
+        "matchers": [
+          { "field": "provider.id", "match": "exact", "values": ["lpnfhpbpmlobjlgkdmnjieeihjmihhjd"] }
+        ]
+      },
+      "cip0103": {
+        "native": true,
+        "evidence": "https://www.npmjs.com/package/@console-wallet/dapp-sdk",
+        "since": "2025-11-01"
+      }
     },
     {
       "id": "loop",
       "name": "5N Loop",
       "description": "5N Loop Wallet for Canton Network",
       "homepage": "https://cantonloop.com",
-      "icon": "https://cantonloop.com/icon.png",
+      "icon": "https://registry.partylayer.xyz/wallets/loop.svg",
       "supportedNetworks": ["devnet", "testnet", "mainnet"],
       "capabilities": {
         "signMessage": true,
@@ -59,7 +70,7 @@
       "name": "Cantor8",
       "description": "Cantor8 Mobile Wallet for Canton Network",
       "homepage": "https://cantor8.tech",
-      "icon": "https://cantor8.tech/icon.png",
+      "icon": "https://registry.partylayer.xyz/wallets/cantor8.svg",
       "supportedNetworks": ["devnet", "testnet", "mainnet"],
       "capabilities": {
         "signMessage": true,
@@ -82,7 +93,7 @@
       "name": "Bron",
       "description": "Bron Enterprise Remote Signer for Canton Network",
       "homepage": "https://developer.bron.org",
-      "icon": "https://developer.bron.org/icon.png",
+      "icon": "https://registry.partylayer.xyz/wallets/bron.svg",
       "supportedNetworks": ["devnet", "testnet", "mainnet"],
       "capabilities": {
         "signMessage": true,
@@ -106,7 +117,7 @@
       "name": "Nightly",
       "description": "Nightly Multichain Wallet for Canton Network",
       "homepage": "https://nightly.app",
-      "icon": "https://nightly.app/icon.png",
+      "icon": "https://registry.partylayer.xyz/wallets/nightly.svg",
       "supportedNetworks": ["devnet", "testnet", "mainnet"],
       "capabilities": {
         "signMessage": true,

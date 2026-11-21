@@ -2,7 +2,13 @@
  * Configuration types for PartyLayer SDK
  */
 
-import type { NetworkId, WalletId, WalletAdapter } from '@partylayer/core';
+import type {
+  NetworkId,
+  WalletId,
+  WalletAdapter,
+  OfficialProviderAdapter,
+  OfficialAdapterFactory,
+} from '@partylayer/core';
 import type {
   StorageAdapter,
   CryptoAdapter,
@@ -89,6 +95,19 @@ export interface PartyLayerConfig {
   channel?: 'stable' | 'beta';
   /** Default network */
   network: NetworkId;
+  /**
+   * Network-mismatch enforcement policy (default: `'guard'`).
+   *
+   * When a connected wallet's effective network differs from `network`:
+   * - `'off'`    — detect + emit `session:networkMismatch` only; never block.
+   * - `'guard'`  — (default) block wrong-network TRANSACTIONS (signMessage,
+   *   signTransaction, submitTransaction, ledgerApi); connect still succeeds.
+   * - `'strict'` — also block CONNECT (throws `NetworkMismatchError`).
+   *
+   * BEHAVIOR CHANGE: prior to this, wrong-network transactions always
+   * proceeded. Set `'off'` to restore that.
+   */
+  networkEnforcement?: 'off' | 'guard' | 'strict';
   /** 
    * Wallet adapters to register (OPTIONAL)
    * 
@@ -128,14 +147,41 @@ export interface PartyLayerConfig {
    * });
    * ```
    */
-  adapters?: (WalletAdapter | AdapterClass)[];
+  adapters?: (
+    | WalletAdapter
+    | AdapterClass
+    | OfficialProviderAdapter
+    | OfficialAdapterFactory
+  )[];
   /** Storage adapter (default: browser localStorage-based encrypted) */
   storage?: StorageAdapter;
   /** Crypto adapter (default: WebCrypto) */
   crypto?: CryptoAdapter;
   /** Registry public keys for signature verification (ed25519) */
   registryPublicKeys?: string[];
-  /** 
+  /**
+   * EIP-6963-style announce discovery — the canonical Canton provider contract
+   * (`canton:requestProvider` → `canton:announceProvider`, see provider.md).
+   *
+   * When enabled, `listWallets()` aggregates announced CIP-0103 wallets with
+   * the `window.canton` namespace scan, the registry, and registered adapters:
+   *   - an announced id matching a registered/registry wallet's
+   *     `providerDetection` (provider.id) maps to that adapter — NO duplicate
+   *     picker entry (e.g. Console's announce `lpnf…` → the Console adapter);
+   *   - an UNKNOWN announced id surfaces as a dynamic entry routed to its own
+   *     extension `target` (collision-proof; future announce-capable wallets
+   *     appear with zero code changes).
+   *
+   * Default ON in the browser; ALWAYS skipped under SSR (`typeof window` guard).
+   * With zero announcers, `listWallets()` output is byte-identical to before.
+   */
+  discovery?: {
+    /** Aggregate `canton:announceProvider` wallets. @default true (in browser) */
+    announce?: boolean;
+    /** Announce-collection window in ms. @default 300 (canonical ~300ms) */
+    announceTimeoutMs?: number;
+  };
+  /**
    * Telemetry configuration or adapter
    * 
    * Can be either:
@@ -171,6 +217,12 @@ export interface ConnectOptions {
   requiredCapabilities?: string[];
   /** Timeout in milliseconds */
   timeoutMs?: number;
+  /**
+   * Called with a pairing/display URI (e.g. a WalletConnect `wc:` URI) the
+   * moment the adapter produces one, before approval. Used by the connect UI
+   * to render a QR / deep-link. Adapters without such a URI never call it.
+   */
+  onDisplayUri?: (uri: string) => void;
 }
 
 /**

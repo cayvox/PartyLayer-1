@@ -6,12 +6,16 @@ node_modules/
 # Build outputs
 dist/
 build/
+.next/
+.turbo/
 *.tsbuildinfo
 
-# Environment
+# Environment — ignore ALL .env variants (secrets like the Walley devnet
+# recovery phrase live here); keep only the committed .example templates.
 .env
-.env.local
-.env.*.local
+.env.*
+!.env.example
+!.env.*.example
 
 # IDE
 .vscode/
@@ -55,9 +59,16 @@ fixtures/registry/downgrade/
 PROJECT_OVERVIEW.md
 CHATGPT_BRIEF.md
 docs/PARTYLAYER-PRODUCT-OVERVIEW.md
+MOBILE_INTEGRATION_NOTES.md
 
 # Internal infrastructure
 apps/metrics-backend/
 
 # AI assistant config
 .claude/
+.vercel/
+
+# Test-only Walley E2E harness build artifact
+apps/demo/e2e/walley-harness/bundle.js
+# Test-only: branch registry copied into the harness servedir by serve.mjs
+apps/demo/e2e/walley-harness/registry/

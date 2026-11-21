@@ -13,6 +13,20 @@
 
 // Public API
 export { createPartyLayer, PartyLayerClient } from './client';
+// A2 — announce discovery: dynamic adapter for announce-only wallets without a
+// first-party adapter (canonical providerId `browser:ext:<id>`, provider.md).
+export {
+  GenericAnnounceAdapter,
+  announcedWalletId,
+  ANNOUNCED_WALLET_ID_PREFIX,
+  type GenericAnnounceAdapterArgs,
+} from './announce-adapter';
+// Generic bridge for an app-supplied official @canton-network core-wallet-discovery
+// ProviderAdapter (e.g. Walley) — popup/remote wallets, no wallet-specific package.
+export {
+  GenericDiscoveryAdapter,
+  type GenericDiscoveryAdapterArgs,
+} from './discovery-adapter';
 // Backward compatibility aliases
 export { createPartyLayer as createCantonConnect, PartyLayerClient as CantonConnectClient } from './client';
 // Internal API (for adapter registration - will be hidden in future)
@@ -28,6 +42,7 @@ export type {
   SessionDisconnectedEvent,
   SessionExpiredEvent,
   TxStatusEvent,
+  WalletsChangedEvent,
   ErrorEvent,
 } from './events';
 
@@ -51,6 +66,7 @@ export {
   PartyLayerError,
   PartyLayerError as CantonConnectError,
   WalletNotFoundError,
+  AdapterNotRegisteredError,
   WalletNotInstalledError,
   UserRejectedError,
   OriginNotAllowedError,
@@ -68,16 +84,39 @@ export type { ErrorCode } from '@partylayer/core';
 // Re-export adapter types (for adapter developers)
 export type {
   WalletAdapter,
+  OfficialProviderAdapter,
+  OfficialAdapterFactory,
+  NetworkHosts,
   AdapterContext,
   AdapterDetectResult,
   AdapterConnectResult,
   SignMessageParams,
   SignTransactionParams,
   SubmitTransactionParams,
+  LedgerApiParams,
+  LedgerApiResult,
 } from '@partylayer/core';
+// The structural guards for the above (apps rarely need them, but they are part
+// of the official-adapter contract the bridge consumes).
+export { isOfficialProviderAdapter, isOfficialAdapterFactory } from '@partylayer/core';
 
 // Re-export registry status type
 export type { RegistryStatus } from '@partylayer/registry-client';
+
+// Standards-first CIP-0103 wallet detection (registry-driven)
+export {
+  matchesProviderDetection,
+  findMatchingWallet,
+  findMatchingWalletInfo,
+  deriveGenericWalletName,
+  isCip0103Native,
+} from '@partylayer/registry-client';
+export type {
+  Cip0103StatusForDetection,
+  Cip0103Support,
+  ProviderDetection,
+  ProviderMatcher,
+} from '@partylayer/registry-client';
 
 // Re-export built-in adapters (for advanced usage)
 // dApps don't need to use these directly - they're auto-registered
@@ -87,6 +126,7 @@ export {
   Cantor8Adapter,
   NightlyAdapter,
   BronAdapter,
+  SendAdapter,
   getBuiltinAdapters,
 } from './builtin-adapters';
 

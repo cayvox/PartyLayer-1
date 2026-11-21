@@ -20,11 +20,14 @@ import type {
   SignedMessage,
   SignedTransaction,
   TxReceipt,
+  LedgerApiParams,
+  LedgerApiResult,
   Session,
   PersistedSession,
   CapabilityKey,
   PartyId,
 } from '@partylayer/core';
+import { normalizeLedgerMethodLower, ledgerApiBodyToObject } from '@partylayer/core';
 import {
   toWalletId,
   toPartyId,
@@ -129,6 +132,7 @@ export class NightlyAdapter implements WalletAdapter {
       'restore',
       'signMessage',
       'submitTransaction',
+      'ledgerApi',
       'events',
       'injected',
     ];
@@ -196,6 +200,9 @@ export class NightlyAdapter implements WalletAdapter {
         partyId,
         session: {
           walletId: this.walletId,
+          // The Nightly provider does not report the connected network → not
+          // wallet-reported, so network-mismatch detection is limited for this
+          // adapter (echoes the requested ctx.network).
           network: ctx.network,
           createdAt: Date.now(),
           metadata: {
@@ -388,6 +395,87 @@ export class NightlyAdapter implements WalletAdapter {
       throw mapUnknownErrorToPartyLayerError(err, {
         walletId: this.walletId,
         phase: 'submitTransaction',
+        transport: 'injected',
+        details: { sessionId: session.sessionId },
+      });
+    }
+  }
+
+  /**
+   * Proxy a Ledger API request through the Nightly Wallet.
+   *
+   * Nightly's canton provider may expose ledgerApi or a generic request()
+   * method. We check at runtime — the interface is cast to include these
+   * optional methods that may be present in newer wallet versions.
+   */
+  async ledgerApi(
+    ctx: AdapterContext,
+    session: Session,
+    params: LedgerApiParams,
+  ): Promise<LedgerApiResult> {
+    try {
+      const provider = window.nightly?.canton as unknown as
+        | (NightlyCantonProvider & {
+            ledgerApi?: (p: { requestMethod: string; resource: string; body?: string | Record<string, unknown> }) => Promise<unknown>;
+            request?: (args: { method: string; params?: unknown }) => Promise<unknown>;
+          })
+        | undefined;
+
+      if (!provider) {
+        throw new Error('Not connected to Nightly Wallet');
+      }
+
+      // Nightly is a CIP-0103 RPC wallet — canonical dApp API shape: lower-case
+      // verb + an OBJECT body. The SDK boundary accepts both cases + a string
+      // body, so normalize here.
+      const requestMethod = normalizeLedgerMethodLower(params.requestMethod);
+      const body = ledgerApiBodyToObject(params.body);
+
+      ctx.logger.debug('Proxying ledger API request via Nightly Wallet', {
+        sessionId: session.sessionId,
+        requestMethod,
+        resource: params.resource,
+      });
+
+      if (typeof provider.ledgerApi === 'function') {
+        const result = await provider.ledgerApi({
+          requestMethod,
+          resource: params.resource,
+          body,
+        });
+        const response = result as { response?: string } | string;
+        return {
+          response: typeof response === 'string'
+            ? response
+            : (response?.response ?? JSON.stringify(response)),
+        };
+      }
+
+      if (typeof provider.request === 'function') {
+        const result = await provider.request({
+          method: 'ledgerApi',
+          params: {
+            requestMethod,
+            resource: params.resource,
+            body,
+          },
+        });
+        const response = result as { response?: string } | string;
+        return {
+          response: typeof response === 'string'
+            ? response
+            : (response?.response ?? JSON.stringify(response)),
+        };
+      }
+
+      throw new CapabilityNotSupportedError(
+        this.walletId,
+        'ledgerApi — update Nightly Wallet to a version that supports CIP-0103 ledgerApi',
+      );
+    } catch (err) {
+      throw mapUnknownErrorToPartyLayerError(err, {
+        walletId: this.walletId,
+        phase: 'ledgerApi',
         transport: 'injected',
         details: { sessionId: session.sessionId },
       });
