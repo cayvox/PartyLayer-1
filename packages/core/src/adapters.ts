@@ -24,17 +24,78 @@ import type {
   SignedTransaction,
   TxReceipt,
 } from './types';
+import type { TransferIntent, TransferResult } from './transfer';
 import {
   CapabilityNotSupportedError,
   WalletNotInstalledError,
+  TransportError,
 } from './errors';
+
+/**
+ * What a wallet's presence actually is.
+ *
+ * `installed` could only ever say yes or no, and eight of our twelve adapters
+ * had no honest way to answer it — a QR wallet, a hosted popup, a relay and an
+ * OAuth service have no local artefact to probe. They answered `true`, meaning
+ * "reachable", and the picker read it as "installed". Cantor8 is not even an
+ * extension: its tile said installed, and clicking it opened a tab.
+ *
+ * So the question splits. `no-local-install` is NOT a degraded `installed` and
+ * must never be rendered as one — it is a different, true answer.
+ *
+ * `docs/adapters.md` carries the table of which adapters probe what, and the
+ * one known mismatch still outstanding (Cantor8 classifies as `scan` but opens
+ * a tab — a registry-data fix queued with D5/D6).
+ */
+export type Availability =
+  /** A local artefact was probed and is present. */
+  | { kind: 'installed' }
+  /** A local artefact was probed and is absent. `install` offers the download. */
+  | { kind: 'not-installed'; install?: string }
+  /**
+   * There is nothing local to probe: the wallet is reached by QR, a hosted
+   * popup, or a relay. Not a failure, and not an install prompt — the picker
+   * should say how it opens ("Scan with the Loop app", "Opens cantor8.tech").
+   */
+  | { kind: 'no-local-install' }
+  // NO `needs-config` VARIANT. It was drafted, and nothing could produce it:
+  // BronAdapter and WalletConnectAdapter both REQUIRE their config in the
+  // constructor (WalletConnect throws without a projectId), so an unconfigured
+  // wallet has no adapter instance to ask. That case is already handled a level
+  // up by not registering the adapter, which is why Bron is absent from the
+  // picker rather than present and broken. Shipping a state nothing returns
+  // would be the same defect as a required field with no honest value.
+  /** The probe failed or timed out. Distinct from a probe that said no. */
+  | { kind: 'unknown'; reason?: string };
 
 /**
  * Adapter detection result
  */
 export interface AdapterDetectResult {
-  /** Whether wallet is installed */
+  /**
+   * @deprecated Read {@link AdapterDetectResult.availability} instead.
+   *
+   * MISLEADING FOR MOST WALLETS. This field asks "is a local install present?",
+   * which only has an answer for the four adapters that have something local to
+   * probe (Console, Nightly, Send, and the announce adapter, whose presence is
+   * established by the announce itself). The other eight — Loop, Cantor8, Bron,
+   * WalletConnect, and the three vendor popup adapters behind
+   * GenericDiscoveryAdapter — return a constant `true` that asserts nothing,
+   * because there is no local install for them to have.
+   *
+   * A picker branching on `installed` therefore shows a wallet as ready when it
+   * has only established that a browser exists. Read `availability` and switch
+   * on its `kind`. This field remains for source compatibility and is still
+   * populated (`kind === 'installed'`), so existing consumers do not break.
+   */
   installed: boolean;
+  /**
+   * What the wallet's presence actually is. Prefer this over `installed`.
+   * Optional only so an out-of-tree adapter that predates it still type-checks;
+   * every adapter in this repo populates it, and `gate:conformance` enforces
+   * that it agrees with `installed`.
+   */
+  availability?: Availability;
   /** Reason if not installed */
   reason?: string;
 }
@@ -80,15 +141,94 @@ export interface SubmitTransactionParams {
 }
 
 /**
- * Ledger API proxy parameters (CIP-0103 ledgerApi method)
+ * Method verb accepted at the SDK boundary for {@link LedgerApiParams}. A
+ * friendly superset: both cases are accepted because wallets diverge (Send's
+ * schema requires lower-case; CIP-0103 providers use upper-case). Each adapter
+ * normalizes the case to what its wallet requires — see {@link normalizeLedgerMethodUpper}.
+ */
+export type LedgerApiMethod =
+  | 'GET'
+  | 'POST'
+  | 'PUT'
+  | 'DELETE'
+  | 'PATCH'
+  | 'get'
+  | 'post'
+  | 'put'
+  | 'delete'
+  | 'patch';
+
+/**
+ * Ledger API proxy parameters (CIP-0103 ledgerApi method).
+ *
+ * This is a friendly superset so ONE call works across all wallets: the case of
+ * `requestMethod` is normalized per-adapter, and `body` may be a JSON string OR
+ * a plain object — each adapter coerces it to the shape its wallet requires
+ * (Send wants an object; CIP-0103 providers / Loop want a JSON string).
  */
 export interface LedgerApiParams {
-  /** HTTP method for the JSON Ledger API */
-  requestMethod: 'GET' | 'POST' | 'PUT' | 'DELETE';
-  /** Resource path (e.g., "/v1/state/acs") */
+  /** HTTP method for the JSON Ledger API (case normalized per-adapter). */
+  requestMethod: LedgerApiMethod;
+  /** Resource path (e.g., "/v2/state/active-contracts"). */
   resource: string;
-  /** Optional JSON body */
-  body?: string;
+  /** Optional JSON body — a JSON string OR a plain object (coerced per-adapter). */
+  body?: string | Record<string, unknown>;
+}
+
+/**
+ * Normalize a {@link LedgerApiParams} verb to LOWER-case — the canonical
+ * CIP-0103 dApp API form (splice-wallet-kernel `LedgerApiRequest.requestMethod`
+ * is the enum `["get","post","patch","put","delete"]`). Every `window.canton`
+ * CIP-0103 RPC wallet (Send / Console / Nightly / WalletConnect / the announce
+ * bridge) expects this.
+ */
+export function normalizeLedgerMethodLower(
+  method: LedgerApiMethod,
+): 'get' | 'post' | 'patch' | 'put' | 'delete' {
+  return method.toLowerCase() as 'get' | 'post' | 'patch' | 'put' | 'delete';
+}
+
+/**
+ * Coerce a {@link LedgerApiParams} body to a plain OBJECT (or `undefined`) — the
+ * canonical CIP-0103 dApp API form (`LedgerApiRequest.body` is
+ * `{ type: 'object' }`). An object passes through; a JSON string is parsed; a
+ * non-JSON-parseable string throws.
+ */
+export function ledgerApiBodyToObject(
+  body: string | Record<string, unknown> | undefined,
+): Record<string, unknown> | undefined {
+  if (body == null) return undefined;
+  if (typeof body !== 'string') return body;
+  try {
+    return JSON.parse(body) as Record<string, unknown>;
+  } catch {
+    throw new TransportError(
+      'ledgerApi body must be a JSON object (or JSON-parseable string) for a CIP-0103 wallet',
+    );
+  }
+}
+
+/**
+ * Normalize a {@link LedgerApiParams} verb to upper-case. Retained for the Bron
+ * REST proxy (case-insensitive HTTP JSON API) — NOT a CIP-0103 RPC wallet; the
+ * CIP-0103 wallets use {@link normalizeLedgerMethodLower}.
+ */
+export function normalizeLedgerMethodUpper(
+  method: LedgerApiMethod,
+): 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH' {
+  return method.toUpperCase() as 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH';
+}
+
+/**
+ * Coerce a {@link LedgerApiParams} body to a JSON string (or `undefined`) — the
+ * form Loop's handlers and the Bron REST proxy expect. An object is
+ * `JSON.stringify`-d; a string passes through verbatim.
+ */
+export function ledgerApiBodyToString(
+  body: string | Record<string, unknown> | undefined,
+): string | undefined {
+  if (body == null) return undefined;
+  return typeof body === 'string' ? body : JSON.stringify(body);
 }
 
 /**
@@ -159,6 +299,13 @@ export interface CryptoAdapter {
   encrypt(data: string, key: string): Promise<string>;
   decrypt(encrypted: string, key: string): Promise<string>;
   generateKey(): Promise<string>;
+  /**
+   * Optional native session-ID entropy when platform getRandomValues is unavailable.
+   * Return exactly byteLength fresh bytes from a cryptographically secure OS RNG.
+   * Sync implementations preserve a browser's popup gesture; native bridges may
+   * return a Promise. Never return an encryption key, hardware handle or weak RNG.
+   */
+  randomBytes?(byteLength: number): Uint8Array | Promise<Uint8Array>;
 }
 
 /**
@@ -247,6 +394,25 @@ export interface WalletAdapter {
     opts?: {
       timeoutMs?: number;
       partyId?: PartyId;
+      /** When false, prefer remote/mobile transport over installed extension */
+      preferInstalled?: boolean;
+      /**
+       * Called with a pairing/display URI (e.g. a WalletConnect `wc:` URI) as
+       * soon as the adapter produces one, before the user approves. Lets the
+       * connect UI render a QR / deep-link itself. Adapters that have no such
+       * URI (their own SDK shows the QR) simply never call it.
+       */
+      onDisplayUri?: (uri: string) => void;
+      /**
+       * Aborted when the caller's connect deadline fires. An adapter that opens
+       * a popup, QR overlay or socket should listen and tear it down: without
+       * this the SDK's `Promise.race` walked away and the wallet UI stayed on
+       * screen, able to complete a connect nobody was waiting for any more.
+       *
+       * Optional, and ignoring it is safe — behaviour is then exactly what it
+       * was before the signal existed.
+       */
+      signal?: AbortSignal;
     }
   ): Promise<AdapterConnectResult>;
 
@@ -316,6 +482,36 @@ export interface WalletAdapter {
   ): Promise<LedgerApiResult>;
 
   /**
+   * Request a typed transfer (optional - only if the wallet supports it).
+   *
+   * The application supplies an intent; the WALLET builds the command, prepares
+   * it against its own validator, displays it, obtains the user's approval,
+   * signs, executes, and reports the real update id. PartyLayer relays the
+   * intent and the result and never touches the prepared transaction — see the
+   * Model 2 boundary in docs/partylayer-and-canton-topology.md.
+   *
+   * An implementation MUST:
+   * - build its wallet request only from {@link TRANSFER_INTENT_FIELDS}, via
+   *   {@link toTransferIntent}, so a caller-supplied option can never reach the
+   *   wallet;
+   * - return a real `updateId` or throw — never a command id, a submission id,
+   *   a signature, or a generated placeholder;
+   * - reach a wallet call that shows the user an explicit approval.
+   *
+   * An adapter that cannot satisfy all three does not implement this method,
+   * and its `getCapabilities()` therefore omits `'transfer'`.
+   *
+   * @param ctx Adapter context
+   * @param session Active session — the acting party comes from here, never from the caller
+   * @param intent What to transfer
+   */
+  requestTransfer?(
+    ctx: AdapterContext,
+    session: Session,
+    intent: TransferIntent
+  ): Promise<TransferResult>;
+
+  /**
    * Subscribe to adapter events (optional)
    * @param event Event name
    * @param handler Event handler
@@ -325,6 +521,141 @@ export interface WalletAdapter {
     event: AdapterEventName,
     handler: (payload: unknown) => void
   ): () => void;
+}
+
+/**
+ * Structural ("duck-type") match for the official
+ * `@canton-network/core-wallet-discovery` `ProviderAdapter` shape.
+ *
+ * We deliberately do NOT import `@canton-network/*` (mirroring the stance in
+ * `@partylayer/provider`'s extension-channel) — the standard's SHAPE is the
+ * contract, not its package. An app supplies a concrete instance (e.g.
+ * `new WalleyAdapter()`) and the SDK bridges it generically via
+ * `GenericDiscoveryAdapter`, so a popup/remote wallet that neither injects
+ * `window.canton` nor announces can still be hosted by the generic layer with
+ * NO wallet-specific adapter package. Any standards-compliant wallet shipping
+ * this shape inherits the capability.
+ *
+ * `provider()` returns a `CIP0103Provider` (the official `Provider<RpcTypes>`
+ * already exposes `request`/`on`/`emit`/`removeListener`); the host/network are
+ * baked into the app-supplied adapter at construction, so the bridge never sees
+ * or sets them.
+ */
+/**
+ * The provider surface returned by an {@link OfficialProviderAdapter} —
+ * `request` + the EventEmitter trio (`on`/`emit`/`removeListener`).
+ *
+ * Intentionally LOOSE (`any`-typed args): the official `@canton-network`
+ * `Provider<RpcTypes>` types `request` as generic over its OWN method literals
+ * (`request<M extends keyof RpcTypes>(args: RequestArgs<RpcTypes, M>)`), which
+ * is NOT structurally assignable to our string-method `CIP0103Provider.request`
+ * — even though it's call-compatible at runtime (the bridge only ever calls
+ * `request({ method, params })`). Loosening the args lets a real official
+ * adapter satisfy this shape; the bridge treats it as a `CIP0103Provider` at the
+ * call site. Without this, consumers couldn't pass e.g. `new WalleyAdapter()`
+ * without a cast.
+ */
+/* eslint-disable @typescript-eslint/no-explicit-any */
+export interface OfficialProvider {
+  request(args: any): Promise<any>;
+  on(event: string, listener: (...args: any[]) => void): unknown;
+  emit(event: string, ...args: any[]): boolean;
+  removeListener(event: string, listener: (...args: any[]) => void): unknown;
+}
+/* eslint-enable @typescript-eslint/no-explicit-any */
+
+export interface OfficialProviderAdapter {
+  /** Stable provider identity (e.g. "walley"). */
+  readonly providerId: string;
+  /** Display name (e.g. "Walley"). */
+  readonly name: string;
+  /** Provider transport kind, if surfaced ('browser' | 'desktop' | 'mobile' | 'remote'). */
+  readonly type?: string;
+  /** Branding icon (URL or data URI), if surfaced. */
+  readonly icon?: string;
+  /** Install/availability probe — popup-free. */
+  detect(): Promise<boolean>;
+  /** The live provider (request + on/emit/removeListener). */
+  provider(): OfficialProvider;
+  /** Optional session restore (returns a restored provider, or null). */
+  restore?(): Promise<OfficialProvider | null>;
+  /** Optional teardown. */
+  teardown?(): void;
+}
+
+/**
+ * Structural guard for {@link OfficialProviderAdapter}. Checks only the
+ * required surface (`providerId` string + `detect`/`provider` functions); the
+ * returned `provider()` value is separately validated against the
+ * `CIP0103Provider` duck-type by the consumer.
+ */
+export function isOfficialProviderAdapter(
+  value: unknown,
+): value is OfficialProviderAdapter {
+  if (typeof value !== 'object' || value === null) return false;
+  const a = value as Record<string, unknown>;
+  return (
+    typeof a.providerId === 'string' &&
+    a.providerId.length > 0 &&
+    typeof a.detect === 'function' &&
+    typeof a.provider === 'function'
+  );
+}
+
+/**
+ * Network→host mapping for a discovery-adapter wallet. This is DATA — it lives
+ * in the registry entry's `adapter.networkHosts` — so the generic bridge can
+ * resolve `networkHosts[activeNetwork]` with NO wallet URL hardcoded in SDK or
+ * app code. A developer writes `<PartyLayerKit network="mainnet">` and the host
+ * is looked up from the wallet's own entry.
+ *
+ * Partial: a wallet need not support every network (e.g. mainnet-only). A
+ * missing key is a CLEAR failure at connect (the unsupported network is named),
+ * never a silent wrong-network fallback.
+ */
+export type NetworkHosts = Partial<Record<NetworkId, string>>;
+
+/**
+ * Factory form of an official ProviderAdapter. Instead of a pre-constructed
+ * instance with a baked host, the app supplies `create(host)` so the bridge can
+ * construct the official adapter with a NETWORK-RESOLVED host at connect time.
+ *
+ * Why a factory and not re-hosting an instance: official adapters (e.g. Walley)
+ * seal `host` at construction (`private host`, no setter), so a pre-built
+ * instance cannot be re-pointed at another network's host. The factory is the
+ * only clean path to network-driven host resolution.
+ *
+ * `create(host)` MUST be synchronous and side-effect-light (just construct the
+ * adapter) — the bridge calls it on the popup-safe gesture path, so any awaited
+ * work before the wallet's `window.open` would break gesture survival. The host
+ * is pre-resolved during warm-up; `create` only builds the instance.
+ */
+export interface OfficialAdapterFactory {
+  /** Stable provider identity (e.g. "walley") — matches the registry entry id / `config.providerId`. */
+  readonly providerId: string;
+  /** Construct the official adapter bound to `host`. Synchronous; no awaited work. */
+  create(host: string): OfficialProviderAdapter;
+  /** Display-name override (else the constructed adapter's `name`). */
+  readonly name?: string;
+  /** Icon override (else the constructed adapter's `icon`). */
+  readonly icon?: string;
+}
+
+/**
+ * Structural guard for {@link OfficialAdapterFactory}. Distinguishes the factory
+ * form (`create` function) from a pre-constructed {@link OfficialProviderAdapter}
+ * instance (`provider` function) in `config.adapters`.
+ */
+export function isOfficialAdapterFactory(
+  value: unknown,
+): value is OfficialAdapterFactory {
+  if (typeof value !== 'object' || value === null) return false;
+  const a = value as Record<string, unknown>;
+  return (
+    typeof a.providerId === 'string' &&
+    a.providerId.length > 0 &&
+    typeof a.create === 'function'
+  );
 }
 
 /**
@@ -347,14 +678,39 @@ export function capabilityGuard(
 }
 
 /**
- * Check if wallet is installed
- * Throws WalletNotInstalledError if not installed
+ * Refuse to connect to a wallet we PROVED is absent.
+ *
+ * This guard used to read `installed`, and that was the load-bearing reason the
+ * dishonest `true` could not simply be corrected: eight adapters returned it
+ * because returning the truth would have made this guard block them. Making
+ * Loop, Cantor8, WalletConnect, Bron and the popup wallets answer honestly broke
+ * connect for every one of them until this changed — the guard was the consumer
+ * the lie was written for.
+ *
+ * The question here was never "is it installed". It is "do we already know this
+ * cannot work", and only ONE availability answers yes: `not-installed`, which
+ * means a local artefact was looked for and was not there. Specifically:
+ *
+ *   - `no-local-install` proceeds. There is nothing to install; connect() opens
+ *     the QR, popup or relay. Blocking it was the regression.
+ *   - `unknown` proceeds. A probe that timed out is not proof of absence, and
+ *     refusing on it would turn a slow extension into a missing one.
+ *   - `installed` proceeds, obviously.
+ *
+ * An adapter that predates `availability` still works: absent the field, the
+ * deprecated `installed` boolean is used exactly as before.
  */
 export async function installGuard(
   adapter: WalletAdapter
 ): Promise<void> {
   const detect = await adapter.detectInstalled();
-  if (!detect.installed) {
+  // Absent `availability` (an out-of-tree adapter predating it), fall back to
+  // the deprecated boolean, which behaves exactly as it did before.
+  const known = detect.availability
+    ? detect.availability.kind === 'not-installed'
+    : !detect.installed;
+
+  if (known) {
     throw new WalletNotInstalledError(adapter.walletId, detect.reason);
   }
 }

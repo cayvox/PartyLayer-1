@@ -1,0 +1,252 @@
+'use client';
+
+import { useDocs } from '../../layout';
+
+export default function SendContent() {
+  const { H1, H2, H3, P, Code, CodeBlock, Callout, PrevNext, A, UL, LI, Strong } = useDocs();
+
+  return (
+    <>
+      <H1>Send Wallet</H1>
+
+      <P>
+        <Strong>Send</Strong> is a passkey-based Canton wallet that speaks the splice-wallet-kernel
+        OpenRPC contract and announces itself over <Code>{'canton:announceProvider'}</Code> rather than
+        binding the shared <Code>{'window.canton'}</Code> slot. The dApp connection layer is open-sourced as{' '}
+        <A href="https://sigilry.org">Sigilry</A>; this PartyLayer adapter wraps that contract with the
+        same surface every other Canton wallet uses.
+      </P>
+
+      <H2 id="how-send-differs">How Send Differs</H2>
+
+      <div style={{ overflowX: 'auto', marginBottom: 24 }}>
+        <table style={{
+          width: '100%', borderCollapse: 'collapse', fontSize: 14,
+          fontFamily: 'ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif',
+          border: '1px solid rgba(15,23,42,0.10)', borderRadius: 10, overflow: 'hidden',
+        }}>
+          <thead>
+            <tr style={{ background: '#F5F6F8' }}>
+              {['Property', 'Send', 'Notes'].map(h => (
+                <th key={h} style={{ textAlign: 'left', padding: '10px 14px', fontWeight: 600, color: '#0B0F1A', borderBottom: '1px solid rgba(15,23,42,0.10)', fontSize: 13 }}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {[
+              { prop: 'Authentication', send: 'Passkey (WebAuthn-PRF)', note: 'Touch ID / Face ID prompt per signature' },
+              { prop: 'Discovery', send: 'canton:announceProvider', note: 'Announce-based (EIP-6963 style); does not bind window.canton' },
+              { prop: 'Networks', send: 'canton:mainnet only', note: '' },
+            ].map(r => (
+              <tr key={r.prop} style={{ borderBottom: '1px solid rgba(15,23,42,0.10)' }}>
+                <td style={{ padding: '10px 14px', fontWeight: 500, color: '#0B0F1A' }}>{r.prop}</td>
+                <td style={{ padding: '10px 14px', color: '#0B0F1A', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: 12.5 }}>{r.send}</td>
+                <td style={{ padding: '10px 14px', color: '#64748B' }}>{r.note}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      <H2 id="installation">Installation</H2>
+      <P>
+        Send is delivered as a browser extension. Direct your users to the Send wallet homepage at{' '}
+        <A href="https://sigilry.org">sigilry.org</A> for current installation instructions before
+        they can connect.
+      </P>
+      <CodeBlock language="bash">{`npm install @partylayer/react @tanstack/react-query`}</CodeBlock>
+      <P>
+        With <Code>{'PartyLayerKit'}</Code>{' '}there is no further wiring: Send is served through the
+        CIP-0103 announce path, so it appears in the wallet picker automatically when the user has Send
+        installed. If you build a custom adapter set and want the bespoke <Code>{'SendAdapter'}</Code>{' '}
+        explicitly, register it alongside the built-ins:
+      </P>
+      <CodeBlock language="tsx">{`import { createPartyLayer, getBuiltinAdapters, SendAdapter } from '@partylayer/sdk';
+
+const client = createPartyLayer({
+  network: 'mainnet',
+  app: { name: 'My dApp' },
+  adapters: [...getBuiltinAdapters(), new SendAdapter()],
+});`}</CodeBlock>
+      <Callout type="note">
+        Send is <Strong>not</Strong> in <Code>{'getBuiltinAdapters()'}</Code> (that returns Loop,
+        Cantor8, and Nightly). By default Send is discovered through the CIP-0103 announce path, so the
+        explicit <Code>{'SendAdapter'}</Code> above is only needed if you want the bespoke adapter instead
+        of the announce path.
+      </Callout>
+
+      <H2 id="connection-flow">Connection Flow</H2>
+      <CodeBlock language="tsx">{`import { useConnect } from '@partylayer/react';
+
+function ConnectWithSend() {
+  const { connect, isConnecting } = useConnect();
+  return (
+    <button
+      onClick={() => connect('send')}
+      disabled={isConnecting}
+    >
+      {isConnecting ? 'Connecting…' : 'Connect with Send'}
+    </button>
+  );
+}`}</CodeBlock>
+      <P>End-to-end user experience:</P>
+      <UL>
+        <LI>User clicks <Strong>Connect with Send</Strong>.</LI>
+        <LI>Send extension shows its{' '}<Strong>Connect to Site?</Strong>{' '}permission prompt.</LI>
+        <LI>On approval, the OS surfaces a{' '}<Strong>passkey prompt</Strong> (Touch ID / Face ID).</LI>
+        <LI>Once unlocked, the SDK receives a session containing <Code>{'partyId'}</Code>,{' '}
+          <Code>{'kernelId'}</Code>, and the wallet{"'"}s public key.</LI>
+      </UL>
+      <Callout type="note">
+        Every signature operation (<Code>{'signMessage'}</Code>, <Code>{'submitTransaction'}</Code>) prompts
+        a fresh passkey unlock, this is by design. Send does not cache passkey approval across calls.
+      </Callout>
+
+      <H2 id="reading-the-ledger">Reading the Ledger</H2>
+      <P>
+        Send proxies the Canton v2 JSON Ledger API through Sigilry{"'"}s <Code>{'ledgerApi'}</Code> RPC
+        method. Use <Code>{'useLedgerApi'}</Code> for any read-side query:
+      </P>
+      <CodeBlock language="tsx">{`import { useLedgerApi } from '@partylayer/react';
+
+function LedgerEndDisplay() {
+  const { ledgerApi } = useLedgerApi();
+  const [offset, setOffset] = useState<string | null>(null);
+
+  useEffect(() => {
+    ledgerApi({
+      requestMethod: 'GET',
+      resource: '/v2/state/ledger-end',
+    }).then(({ response }) => {
+      const parsed = JSON.parse(response) as { offset: string };
+      setOffset(parsed.offset);
+    });
+  }, [ledgerApi]);
+
+  return <div>Ledger end: {offset ?? 'loading…'}</div>;
+}`}</CodeBlock>
+      <P>
+        For active-contracts queries with <Code>{'eventFormat'}</Code>, see the{' '}
+        <A href="/docs/wallet-balances">Wallet Balances</A> guide, Send accepts the same
+        request shape as the other ledger-API-capable adapters.
+      </P>
+
+      <H2 id="token-transfers">Token Standard Transfers (CIP-56)</H2>
+      <P>
+        Send signs and submits transactions in a single step via{' '}
+        <Code>{'prepareExecuteAndWait'}</Code>. The wallet handles Scan-side coordination, choice
+        context lookup, and passkey signing internally. Adapter consumers call{' '}
+        <Code>{'submitTransaction'}</Code> with a <Code>{'JsPrepareSubmissionRequest'}</Code>:
+      </P>
+      <CodeBlock language="tsx">{`import { useSubmitTransaction } from '@partylayer/react';
+
+const { submit } = useSubmitTransaction();
+
+await submit({
+  signedTx: {
+    commandId: crypto.randomUUID(),
+    commands: [
+      {
+        ExerciseCommand: {
+          templateId:
+            '#splice-api-token-transfer-instruction-v1:Splice.Api.Token.TransferInstructionV1:TransferFactory',
+          contractId: factoryCid,
+          choice: 'TransferFactory_Transfer',
+          choiceArgument: { /* …Scan-derived shape… */ },
+        },
+      },
+    ],
+    actAs: [session.partyId],
+  },
+});`}</CodeBlock>
+      <P>
+        See <A href="/docs/token-transfers">Token Transfers</A> for the full CIP-56 flow including the
+        Scan <Code>{'/registry/transfer-instruction/v1/transfer-factory'}</Code> endpoint and the
+        choice-context tagged-union shape.
+      </P>
+      <Callout type="warning">
+        The Send adapter ships the same <Strong>templateId migration warning</Strong> as Loop,
+        passing a legacy <Code>{'Amulet_Transfer'}</Code> exercise on{' '}
+        <Code>{'Splice.Amulet:Amulet'}</Code> throws an actionable error pointing at this page.
+      </Callout>
+
+      <H2 id="capabilities">Capability Matrix</H2>
+      <UL>
+        <LI><Strong>connect</Strong>, supported (Sigilry <Code>{'connect'}</Code> RPC + <Code>{'getPrimaryAccount'}</Code>)</LI>
+        <LI><Strong>disconnect</Strong>, supported</LI>
+        <LI><Strong>restore</Strong>, supported (silent <Code>{'status'}</Code> probe; no popup on reload)</LI>
+        <LI><Strong>signMessage</Strong>, supported (passkey-signed)</LI>
+        <LI><Strong>signTransaction</Strong>, <Strong>not supported</Strong>; fused into{' '}
+          <Code>{'prepareExecute'}</Code>. Calling it throws{' '}
+          <Code>{'CapabilityNotSupportedError'}</Code> pointing at <Code>{'submitTransaction'}</Code>.</LI>
+        <LI><Strong>submitTransaction</Strong>, supported via{' '}
+          <Code>{'prepareExecuteAndWait'}</Code>; receipt populated from{' '}
+          <Code>{'tx.payload.updateId'}</Code>.</LI>
+        <LI><Strong>ledgerApi</Strong>, supported (full Sigilry passthrough; matches Console / Nightly).</LI>
+        <LI><Strong>events</Strong>, supported; <Code>{'txChanged'}</Code> bridged to PartyLayer{' '}
+          <Code>{'tx:status'}</Code>.</LI>
+        <LI><Strong>injected</Strong>: declared as a capability, but Send is discovered and driven over the <Code>{'canton:announceProvider'}</Code> channel rather than by binding the shared <Code>{'window.canton'}</Code> slot.</LI>
+      </UL>
+
+      <H2 id="network-support">Network Support</H2>
+      <P>
+        This adapter integrates with Send on <Code>{'canton:mainnet'}</Code>.
+      </P>
+      <Callout type="note">
+        <Strong>Demo-app display caveat:</Strong> the PartyLayer demo at{' '}
+        <Code>{'localhost:3000'}</Code> defaults its network label to{' '}
+        <Code>{'devnet'}</Code>. That label reflects the demo{"'"}s configuration, not the actual
+        network the connected wallet sits on. Send{"'"}s adapter reads the live network via its{' '}
+        <Code>{'getActiveNetwork()'}</Code> provider call and reports{' '}
+        <Code>{'canton:mainnet'}</Code> when Send is active. dApps that ship to production should
+        configure <Code>{'PartyLayerKit'}</Code> with{' '}
+        <Code>{'network="mainnet"'}</Code> when targeting Send.
+      </Callout>
+
+      <H2 id="troubleshooting">Troubleshooting</H2>
+      <UL>
+        <LI><Strong>{'"Send not detected"'}</Strong>: the extension is missing, or Send did not
+          announce over <Code>{'canton:announceProvider'}</Code> within the detection window. Send
+          announces on its own channel and does not depend on owning{' '}
+          <Code>{'window.canton'}</Code>; install Send and reload.</LI>
+        <LI><Strong>{'"Connection cancelled"'}</Strong>, the user dismissed the passkey prompt or the
+          extension popup. Triggering connect again is safe.</LI>
+        <LI><Strong>{'"Authentication Failed: Cannot reach authentication server"'}</Strong>, Send{"'"}s
+          backend at <Code>{'auth.cantonwallet.com'}</Code> is unreachable. Check network and retry.</LI>
+        <LI><Strong>{'"OAuth state mismatch"'}</Strong>, stale Send session. Clear cookies for{' '}
+          <Code>{'cantonwallet.com'}</Code> and reconnect.</LI>
+        <LI><Strong>Transaction errors with hint{' '}{'"Execute Unknown on Unknown"'}</Strong>, legacy{' '}
+          <Code>{'Amulet_Transfer'}</Code> exercise on <Code>{'Splice.Amulet:Amulet'}</Code>. Migrate to
+          CIP-56 <Code>{'TransferFactory_Transfer'}</Code>; see{' '}
+          <A href="/docs/token-transfers">Token Transfers</A>.</LI>
+      </UL>
+
+      <H2 id="security-notes">Security Notes</H2>
+      <UL>
+        <LI><Strong>Private keys never leave the extension.</Strong> Passkey signing happens on the
+          user{"'"}s device through WebAuthn-PRF; PartyLayer never touches the underlying key
+          material.</LI>
+        <LI><Strong>Keep authorization in the wallet.</Strong> The compatibility adapter omits
+          access tokens from persisted session metadata. The React live view is in memory;
+          a UI cache is not a secret vault or proof of authorization. Native restoration
+          checks the live provider. See <A href="/docs/advanced#session-persistence">session persistence</A>{' '}
+          for the separate wallet, SDK and UI storage contracts.</LI>
+        <LI><Strong>Announce-scoped channel.</Strong> Send is discovered and every RPC is routed over
+          the dedicated <Code>{'canton:announceProvider'}</Code> channel that Send advertises. Because
+          the channel is bound to the announcing extension, the adapter never acts on a foreign
+          provider that happens to own <Code>{'window.canton'}</Code>; if Send does not announce, the
+          adapter cleanly returns <Strong>not installed</Strong> and yields to the matching adapter.</LI>
+      </UL>
+
+      <H3 id="references">References</H3>
+      <UL>
+        <LI><A href="https://cantonwallet.com">Send (cantonwallet.com)</A></LI>
+        <LI><A href="https://sigilry.org">Sigilry, open-source dApp SDK powering Send</A></LI>
+        <LI><A href="/docs/token-transfers">CIP-56 Token Standard guide</A></LI>
+        <LI><A href="/docs/wallets">Supported wallet capability matrix</A></LI>
+      </UL>
+
+      <PrevNext />
+    </>
+  );
+}

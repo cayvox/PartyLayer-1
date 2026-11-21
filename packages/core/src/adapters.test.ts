@@ -9,9 +9,15 @@ import type { WalletAdapter, CapabilityKey } from './adapters';
 import {
   capabilityGuard,
   installGuard,
+  isOfficialProviderAdapter,
   CapabilityNotSupportedError,
   WalletNotInstalledError,
+  normalizeLedgerMethodLower,
+  normalizeLedgerMethodUpper,
+  ledgerApiBodyToObject,
+  ledgerApiBodyToString,
 } from './adapters';
+import { PartyLayerError } from './errors';
 import { toWalletId } from './types';
 
 /**
@@ -106,6 +112,95 @@ describe('Adapter Contract', () => {
       const result = await adapter.detectInstalled();
       expect(result).toHaveProperty('installed');
       expect(typeof result.installed).toBe('boolean');
+    });
+  });
+
+  describe('isOfficialProviderAdapter', () => {
+    const provider = {
+      request: async () => undefined,
+      on() { return provider; },
+      emit() { return true; },
+      removeListener() { return provider; },
+    };
+    const official = {
+      providerId: 'walley',
+      name: 'Walley',
+      type: 'browser',
+      detect: async () => true,
+      provider: () => provider,
+      restore: async () => null,
+    };
+
+    it('accepts a structurally-complete official ProviderAdapter', () => {
+      expect(isOfficialProviderAdapter(official)).toBe(true);
+    });
+
+    it('accepts the minimal required surface (providerId + detect + provider)', () => {
+      expect(
+        isOfficialProviderAdapter({
+          providerId: 'x',
+          detect: async () => false,
+          provider: () => provider,
+        }),
+      ).toBe(true);
+    });
+
+    it('rejects missing/empty providerId', () => {
+      expect(isOfficialProviderAdapter({ ...official, providerId: '' })).toBe(false);
+      const { providerId: _omit, ...noId } = official;
+      expect(isOfficialProviderAdapter(noId)).toBe(false);
+    });
+
+    it('rejects when detect or provider is not a function', () => {
+      expect(isOfficialProviderAdapter({ ...official, detect: true })).toBe(false);
+      expect(isOfficialProviderAdapter({ ...official, provider: 'nope' })).toBe(false);
+    });
+
+    it('rejects non-objects', () => {
+      expect(isOfficialProviderAdapter(null)).toBe(false);
+      expect(isOfficialProviderAdapter(undefined)).toBe(false);
+      expect(isOfficialProviderAdapter('walley')).toBe(false);
+    });
+  });
+
+  describe('ledgerApi normalization helpers', () => {
+    describe('normalizeLedgerMethodLower (canonical CIP-0103: lower-case verb)', () => {
+      it('lower-cases an upper-case verb', () => {
+        expect(normalizeLedgerMethodLower('POST')).toBe('post');
+        expect(normalizeLedgerMethodLower('GET')).toBe('get');
+        expect(normalizeLedgerMethodLower('PATCH')).toBe('patch');
+      });
+      it('passes a lower-case verb through', () => {
+        expect(normalizeLedgerMethodLower('post')).toBe('post');
+      });
+    });
+
+    describe('ledgerApiBodyToObject (canonical CIP-0103: object body)', () => {
+      it('passes an object through unchanged', () => {
+        const body = { filter: { x: 1 } };
+        expect(ledgerApiBodyToObject(body)).toBe(body);
+      });
+      it('parses a JSON-string body into an object', () => {
+        expect(ledgerApiBodyToObject('{"filter":{"x":1}}')).toEqual({ filter: { x: 1 } });
+      });
+      it('returns undefined for undefined', () => {
+        expect(ledgerApiBodyToObject(undefined)).toBeUndefined();
+      });
+      it('throws a PartyLayerError for a non-JSON string', () => {
+        expect(() => ledgerApiBodyToObject('not-json{')).toThrow(PartyLayerError);
+        expect(() => ledgerApiBodyToObject('not-json{')).toThrow(/JSON object/);
+      });
+    });
+
+    describe('normalizeLedgerMethodUpper / ledgerApiBodyToString (Loop / Bron)', () => {
+      it('upper-cases a verb', () => {
+        expect(normalizeLedgerMethodUpper('post')).toBe('POST');
+      });
+      it('stringifies an object body and passes a string through', () => {
+        expect(ledgerApiBodyToString({ a: 1 })).toBe('{"a":1}');
+        expect(ledgerApiBodyToString('{"a":1}')).toBe('{"a":1}');
+        expect(ledgerApiBodyToString(undefined)).toBeUndefined();
+      });
     });
   });
 });

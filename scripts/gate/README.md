@@ -1,0 +1,161 @@
+# Regression Safety Gate
+
+A mechanical safety net that guarantees we never silently break the wallet
+adapters or the existing public API while the SDK evolves toward the native
+CIP-0103 path. **Pure infrastructure — it adds no runtime behaviour.**
+
+## The single command
+
+```bash
+pnpm gate
+```
+
+`pnpm gate` is the source of truth for "is everything still safe". It runs, in
+order:
+
+1. `pnpm gate:build` — builds `@partylayer/*` (scoped like `ci.yml`, so a
+   transiently broken example/consumer can't block the gate)
+2. `pnpm typecheck` — all packages
+3. `pnpm lint` — all packages
+4. `pnpm gate:test` — all unit tests (`CI=true` forces single-run, no watch)
+5. `pnpm gate:conformance` — CIP-0103 **native-path** conformance
+6. `pnpm gate:api` — public-API surface snapshot diff
+7. `pnpm gate:registry` — registry integrity + cip0103 footgun guard
+
+> **Why build runs first.** Workspace packages resolve `@partylayer/*` imports
+> to each other's built `dist/*.d.ts`, so `typecheck`, the unit tests, the
+> conformance check, and the API snapshot all need a fresh build present. The
+> repo's existing `ci.yml` builds before typechecking for the same reason.
+
+CI runs this exact command on every PR to `main` (see
+`.github/workflows/regression-gate.yml`).
+
+## Sub-commands
+
+| Command | What it does |
+|---|---|
+| `pnpm gate:conformance` | Runs the published CIP-0103 conformance suite against the **native** `PartyLayerProvider`, wrapping an in-repo reference wallet. Fails on any non-conformant result. |
+| `pnpm gate:api` | Diffs each published package's **type surface** (`<pkg>.api.d.ts`, Prettier-normalized) **and packaging surface** (`<pkg>.pkg.json`) against committed snapshots. Fails on any change to a public export, a `peerDependencies` range, an `exports` subpath, `bin`, etc. |
+| `pnpm gate:api:update` | **Intentionally** accepts API/packaging changes by rewriting both snapshot kinds. Run this (and commit) when a change is deliberate. |
+| `pnpm gate:registry` | Validates `registry/v1/{stable,beta}/registry.json` against `tooling/registry-schema/registry.schema.json` and asserts CIP-0103-native wallets keep their `cip0103.native` flag. |
+| `pnpm gate:docs-drift` | Guards the docs that exist as both `docs/<slug>.md` and a hand-authored site page (`apps/demo/src/app/docs/<slug>/content.tsx`) from silently diverging, by comparing their section-heading sets. Fails naming the pair and which side is missing which heading. The pair list is derived (a new doc added in both places must be classified). `quick-start` now follows the same installation, framework setup, configuration and verification journey in both renderings. |
+| `pnpm gate:release-changeset` | Fails when a publishable package's shipping content changed since its `<name>@<version>` release tag but no changeset covers it, so a release would ship nothing for it. Compares `src/` (minus tests), committed `files`-allowlist directories other than `dist` (e.g. `create-partylayer-app/templates`), and consumer-facing `package.json` fields. See "Release changeset guard" below for the escape hatch and the tag requirement. |
+| `pnpm gate:discovery-demos` | Fails when the stable registry lists a discovery-adapter (Path B) wallet that a showcase demo (`apps/tokenization`, `apps/dvp`) does not wire, so a new such wallet cannot be silently forgotten (the SDK hides an unwired discovery-adapter entry, so it would be invisible). Names the wallet, its package, and the app. A demo may deliberately omit a wallet via the documented `EXCEPTIONS` list in the check, with an explicit reason recorded in the check. |
+| `pnpm gate:adapters-closed` | Fails when a directory appears under `packages/adapters` that is not in the frozen legacy allowlist. A wallet integrates through the generic Path A (announce) or Path B (official `ProviderAdapter`) and ships no PartyLayer-specific code; the packages there predate those paths and are kept for compatibility. The failure names the directory, prints the one line decision rule and the guide URL, and points at the allowlist. Editing `LEGACY_ADAPTERS` in the check is the deliberate escape hatch and must be justified in the pull request. |
+
+## How to intentionally update the API snapshot
+
+When you *mean* to change a public API:
+
+```bash
+pnpm gate:build          # produce fresh dist/*.d.ts
+pnpm gate:api:update     # rewrite tooling/api-snapshots/*.api.d.ts + *.pkg.json
+git add tooling/api-snapshots
+git commit -m "chore(api): accept public-API/packaging change for <pkg>"
+```
+
+Reviewers see the exact delta (type surface and/or packaging) in the diff of
+the snapshot files — that is the whole point.
+
+## What is snapshotted, and the snapshot set
+
+Two committed artifacts per package, under `tooling/api-snapshots/`:
+
+- **`<pkg>.api.d.ts`** — the published `.d.ts` entry plus every reachable local
+  declaration chunk. Relative imports, re-exports, import types and reference paths
+  are followed with cycle/duplicate protection; external packages stay external.
+  Each file uses the existing AST canonical, keeping formatting and comments out
+  of the comparison. A missing local declaration fails the gate. Unchunked entries
+  retain their existing canonical form.
+- **`<pkg>.pkg.json`** — normalized JSON of `{ name, main, module, types,
+  exports, imports, bin, peerDependencies, peerDependenciesMeta }`.
+  **`version` is excluded** (it changes every release). Ordinary metadata maps are
+  sorted, but `exports` and `imports` preserve source order recursively: Node tests
+  conditions in that order, so placing `default` before `import` can select another
+  runtime. Optional peer changes are also consumer-visible. These checks catch
+  packaging changes that never appear in a declaration entry.
+
+The set is **auto-discovered**: every workspace package with `"private": false`
+and a `"types"` entry, minus `EXCLUDED_PACKAGES` in `api-snapshot.mjs`. New
+publishable packages (e.g. `@partylayer/session`) are picked up automatically.
+
+## How to add a new CIP-0103-native wallet
+
+When a wallet is confirmed CIP-0103 native, in the **same PR**:
+
+1. Add `"cip0103": { "native": true, "evidence": "<url>", "since": "<date>" }`
+   to its registry entry.
+2. Add its `id` to `REQUIRED_CIP0103_NATIVE` (per channel) in
+   `scripts/gate/registry-check.mjs`.
+
+This keeps the footgun guard in lock-step with the registry.
+
+## Release changeset guard
+
+`gate:release-changeset` (in `scripts/gate/release-changeset.test.mjs`) catches the
+recurring slip where a change reaches `main` that alters what a publishable package
+ships but carries no changeset, so `changeset version` bumps nothing and the change
+never reaches npm. It has happened with an sdk fix, a react-native fix, a `sideEffects`
+flag added to seventeen manifests, and stale scaffold-template pins.
+
+**What it compares**, per publishable package, between its `<name>@<version>` git tag and
+`HEAD` (`dist` is built output and is not committed, so the compare is against the source
+that produces it):
+
+- `src/`, excluding tests, snapshots, and stories;
+- any committed directory the `files` allowlist ships that is not `dist` (today,
+  `create-partylayer-app`'s `templates`);
+- consumer-facing `package.json` fields (`dependencies`, `peerDependencies`, `exports`,
+  `main`, `module`, `types`, `bin`, `files`, `sideEffects`, `type`, and the related
+  install fields), ignoring `version`, `scripts`, and `devDependencies`.
+
+If anything in that scope changed and no changeset names the package, it fails with the
+package, the changed paths or fields, and what to do.
+
+**The escape hatch (do this instead of inventing an empty patch bump).** If a change to a
+publishable package genuinely needs no release, a revert, a moved comment, a tweak the
+exclusions did not catch, add an empty changeset:
+
+```bash
+pnpm changeset --empty
+```
+
+An empty changeset is changesets' own sanctioned way to say the current unreleased changes
+need no version bump. While one is present the guard stays quiet, and it is consumed at the
+next `changeset version` like any other. It is a deliberate, reviewable statement, so a
+reviewer sees it in the diff.
+
+**Not crying wolf.** Tests, snapshots, stories, `dist`, package-root docs and config, and
+non-consumer `package.json` fields are all excluded, and the exclusion list is printed in
+every failure so a developer can see why a file did or did not count. A firing that a
+developer disagrees with is either a real slip or a case for the empty changeset, never a
+reason to weaken the check.
+
+**Tags are required.** The guard reads the `<name>@<version>` tags the release process
+creates. A missing tag is a loud, named failure, because a missing tag itself signals a
+skipped release. CI must therefore fetch tags: the gate workflows check out with
+`fetch-depth: 0`.
+
+## Design choices
+
+- **API snapshot = d.ts rollup, not API Extractor.** The `@partylayer/*`
+  packages build with `tsup`, which already emits a single bundled
+  `dist/index.d.ts` containing the full public type surface. That bundled file
+  *is* the published contract, so snapshotting it (Prettier-normalized) is
+  faithful and deterministic without adding heavy tooling.
+- **Registry check is shape/required-field, not a frozen diff.** Registry
+  content grows additively; the gate only enforces structure + the cip0103
+  footgun guard.
+- **Native-path conformance uses an in-repo reference wallet** (the
+  `createProviderBridge(mockClient)` construction already used by the provider
+  package's own conformance-gate test), so no live wallet is required.
+
+## Excluded packages
+
+`@partylayer/adapter-starter` is **excluded from the API gate**
+(`EXCLUDED_PACKAGES` in `api-snapshot.mjs`). It is a copy-me template, not a
+runtime dependency of any dApp, and it builds with `tsc` (not `tsup`) — its
+`index.d.ts` only re-exports from sibling files rather than inlining the full
+surface, so a snapshot would be half-protection (entry file only) and a source
+of false failures. The eleven `tsup`-built packages (core, provider, react,
+sdk, registry-client, and all six adapters) get full rolled-up surfaces.

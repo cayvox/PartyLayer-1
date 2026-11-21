@@ -1,0 +1,80 @@
+{
+  "name": "@partylayer/vue",
+  "version": "2.0.3",
+  "sideEffects": false,
+  "description": "Vue 3 wallet integration for Canton Network: PartyLayer composables, CIP-0103 wallet sessions and optional TanStack Query and Pinia bindings.",
+  "main": "./dist/index.js",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js"
+    },
+    "./pinia": {
+      "types": "./dist/pinia.d.ts",
+      "import": "./dist/pinia.mjs",
+      "require": "./dist/pinia.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "clean": "rm -rf dist",
+    "lint": "eslint src --ext .ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --passWithNoTests"
+  },
+  "keywords": [
+    "canton",
+    "wallet",
+    "vue",
+    "composables",
+    "canton-network",
+    "cip-0103",
+    "typescript",
+    "nuxt",
+    "dapp"
+  ],
+  "author": "PartyLayer Contributors",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/PartyLayer/PartyLayer.git",
+    "directory": "packages/vue"
+  },
+  "homepage": "https://partylayer.xyz/docs",
+  "bugs": {
+    "url": "https://github.com/PartyLayer/PartyLayer/issues"
+  },
+  "peerDependencies": {
+    "vue": ">=3.4.0",
+    "@tanstack/vue-query": ">=5",
+    "pinia": ">=2"
+  },
+  "peerDependenciesMeta": {
+    "pinia": {
+      "optional": true
+    }
+  },
+  "dependencies": {
+    "@partylayer/core": "workspace:^",
+    "@partylayer/session": "workspace:^"
+  },
+  "devDependencies": {
+    "@partylayer/conformance-runner": "workspace:^",
+    "@partylayer/testing": "workspace:^",
+    "@tanstack/vue-query": "^5.101.0",
+    "@types/node": "^20.11.0",
+    "@vue/server-renderer": "^3.4.0",
+    "@vue/test-utils": "^2.4.6",
+    "happy-dom": "^14.12.0",
+    "pinia": "^2.1.0",
+    "typescript": "^5.3.3",
+    "vitest": "^1.2.0",
+    "vue": "^3.4.0"
+  }
+}

@@ -35,6 +35,13 @@ export type CapabilityKey =
   | 'signTransaction'
   | 'submitTransaction'
   | 'ledgerApi'
+  /**
+   * Typed transfer intent: the wallet builds, displays, approves, signs and
+   * executes a transfer and returns the real update id. Declared only by a
+   * wallet that can do BOTH halves — a real update id and an explicit user
+   * approval. A wallet that can do one but not the other declares it false.
+   */
+  | 'transfer'
   | 'events'
   | 'deeplink'
   | 'popup'
@@ -64,6 +71,91 @@ export interface AdapterMetadata {
   /** Version range (semver) */
   versionRange: string;
 }
+
+/**
+ * Provider matcher: a single rule used by `ProviderDetection.matchers`.
+ *
+ * Three match modes are defined; OR-combined inside a `ProviderDetection`.
+ * Exact and prefix work on string fields directly; domain interprets the
+ * field as a URL and tests its hostname against the registrable domain
+ * (with subdomain support).
+ */
+export type ProviderMatcher =
+  | {
+      field: 'kernel.url' | 'kernel.userUrl';
+      match: 'domain';
+      /** Hostname or registrable domain. Subdomains are accepted. */
+      value: string;
+    }
+  | {
+      field:
+        | 'kernel.id'
+        | 'kernel.url'
+        | 'kernel.userUrl'
+        | 'kernel.clientType'
+        | 'provider.id';
+      match: 'exact';
+      /** One or more exact values; ANY match returns true. */
+      values: string[];
+    }
+  | {
+      field: 'kernel.id' | 'kernel.url' | 'kernel.userUrl';
+      match: 'prefix';
+      value: string;
+    };
+
+/**
+ * Standards-first runtime detection of a CIP-0103 wallet.
+ *
+ * The registry stores these rules so that any current or future wallet
+ * implementing `window.canton` can be identified without code changes —
+ * a registry JSON update is enough.
+ */
+export interface ProviderDetection {
+  /** Transport mechanism. Currently only 'window.canton' is supported. */
+  transport: 'window.canton';
+  /** OR-list of matchers. Provider matches if ANY matcher returns true. */
+  matchers: ProviderMatcher[];
+}
+
+/**
+ * Canonical CIP-0103 support marker.
+ *
+ * When `native: true`, the wallet is treated as a first-class CIP-0103
+ * provider in the picker — it always appears in the "CIP-0103 NATIVE"
+ * section regardless of install state, with a per-wallet readiness
+ * indicator that reflects whether the wallet's `providerDetection` rules
+ * matched the currently-injected `window.canton` provider.
+ *
+ * The field is optional; wallets that don't claim CIP-0103 support omit
+ * it and continue to appear in the "AVAILABLE" section as before.
+ */
+export interface Cip0103Support {
+  /** True if this wallet has confirmed CIP-0103 dApp API support. */
+  native: boolean;
+  /** Public evidence link (npm package, blog post, official statement). */
+  evidence?: string;
+  /** ISO date when CIP-0103 support was confirmed (informational). */
+  since?: string;
+}
+
+/**
+ * How the SDK obtains a wallet's provider for a registry entry.
+ *
+ * - `'injected'`          — `window.canton.*` scanning (the implicit default
+ *                           behavior when `transport` is omitted).
+ * - `'announce'`          — CIP-0103 `canton:announceProvider` discovery.
+ * - `'discovery-adapter'` — the provider comes from an app-supplied
+ *                           `OfficialProviderAdapter` (the official
+ *                           `@canton-network/core-wallet-discovery`
+ *                           `ProviderAdapter` shape), bridged generically by
+ *                           the SDK. For popup/remote wallets that neither
+ *                           inject `window.canton` nor announce. No
+ *                           wallet-specific adapter package is involved.
+ *
+ * Additive + optional: older registries omit it and keep today's behavior.
+ */
+export type AdapterTransport = 'injected' | 'announce' | 'discovery-adapter';
 
 /**
  * Wallet information from registry
@@ -99,6 +191,29 @@ export interface WalletInfo {
   channel: 'stable' | 'beta';
   /** Additional metadata (e.g., originAllowlist) */
   metadata?: Record<string, string>;
+  /**
+   * Optional CIP-0103 runtime detection rules. When present, the picker can
+   * decide whether this wallet is the currently-injected `window.canton`
+   * provider and route it into the "CIP-0103 Native" section without any
+   * hardcoded wallet IDs. Wallets that aren't CIP-0103-injected (e.g. Bron,
+   * Cantor8 deeplink) leave this unset.
+   */
+  providerDetection?: ProviderDetection;
+  /**
+   * Canonical CIP-0103 support marker. When set with `native: true`, the
+   * picker always lists the wallet in the "CIP-0103 NATIVE" section
+   * regardless of install state.
+   */
+  cip0103?: Cip0103Support;
+}
+
+/**
+ * Returns true if the wallet has been canonically marked as CIP-0103
+ * native via its registry entry. The check is structural so it works on
+ * both raw `RegistryWalletEntry` shapes and converted `WalletInfo`.
+ */
+export function isCip0103Native(entry: { cip0103?: Cip0103Support }): boolean {
+  return entry?.cip0103?.native === true;
 }
 
 /**
@@ -124,6 +239,24 @@ export interface Session {
   capabilitiesSnapshot: CapabilityKey[];
   /** Additional metadata (encrypted in storage) */
   metadata?: Record<string, string>;
+  /**
+   * Set when the wallet's reported network differs from the dApp's configured
+   * network (CAIP-2 normalized). Absent when the networks match or no confident
+   * mismatch was detected. See `networkEnforcement` for blocking behavior.
+   */
+  networkMismatch?: { expected: string; actual: string };
+  /**
+   * Wallet-reported payout preapproval (fund-safety signal). When true, a payout
+   * to this party lands directly; when false/absent, it may strand as an
+   * unaccepted offer. A passthrough of what the wallet reports at connect;
+   * absent when the wallet does not report it. Do not infer this from outcomes.
+   */
+  hasPreapproval?: boolean;
+  /**
+   * Admin party ids that can administer the payout preapproval (wallet-reported).
+   * Absent when the wallet does not report it.
+   */
+  utilityPreapprovalAdmins?: string[];
 }
 
 /**
@@ -156,8 +289,21 @@ export interface SignedMessage {
 export interface SignedTransaction {
   /** Signed transaction data */
   signedTx: unknown;
-  /** Transaction hash */
-  transactionHash: TransactionHash;
+  /**
+   * The transaction hash, when the wallet reports one.
+   *
+   * OPTIONAL, and that is the point. This field was required, and a required
+   * field with no honest value is a defect factory: an adapter whose wallet
+   * gives it no hash still has to put something here, so it invents one. Nine
+   * sites across five adapters did exactly that — `tx_<now>_<random>`,
+   * `'pending'`, `''` — and none of them arose from a fallback anyone designed.
+   * They arose from the type demanding a value the path could not produce.
+   *
+   * An adapter with no hash now omits this. A caller that needs one must handle
+   * its absence, which is the truth of the situation rather than a hash-shaped
+   * string that means nothing.
+   */
+  transactionHash?: TransactionHash;
   /** Party ID that signed */
   partyId: PartyId;
 }
@@ -166,8 +312,17 @@ export interface SignedTransaction {
  * Transaction receipt
  */
 export interface TxReceipt {
-  /** Transaction hash */
-  transactionHash: TransactionHash;
+  /** Ledger-reported completion offset, when supplied; never synthesized. */
+  completionOffset?: number;
+  /**
+   * The transaction hash, when the wallet reports one. See
+   * {@link SignedTransaction.transactionHash} for why this is optional.
+   *
+   * Prefer {@link TxReceipt.updateId} when you need a ledger identifier: it is
+   * the ledger's own id for the committed update, and several wallets report a
+   * real one here while having no hash to give at all.
+   */
+  transactionHash?: TransactionHash;
   /** Submission timestamp */
   submittedAt: number;
   /** Command ID (if available) */
@@ -192,8 +347,14 @@ export type TransactionStatus =
 export interface TxStatusUpdate {
   /** Session ID */
   sessionId: SessionId;
-  /** Transaction ID */
-  txId: TransactionHash;
+  /**
+   * Transaction ID, when one is available.
+   *
+   * Optional for the same reason as {@link TxReceipt.transactionHash}, which is
+   * where it comes from: a wallet that reports no hash produces a status update
+   * with no id, and saying so is better than emitting an invented one.
+   */
+  txId?: TransactionHash;
   /** Current status */
   status: TransactionStatus;
   /** Raw transaction data (if available) */

@@ -1,5 +1,7 @@
 # Event Specification
 
+> Published on the docs site: [partylayer.xyz/docs/events](https://partylayer.xyz/docs/events).
+
 This document defines the event payloads emitted by PartyLayer SDK.
 
 ## Event System Overview
@@ -178,6 +180,47 @@ interface PartyLayerError extends Error {
 
 ---
 
+### session:networkMismatch
+
+Emitted when the connected wallet's effective network differs from the dApp's configured network. Emitted under all policies (informational); `enforced` is true when the active policy (`guard` or `strict`) will block.
+
+```typescript
+interface SessionNetworkMismatchEvent {
+  type: 'session:networkMismatch';
+  sessionId: SessionId;
+  expected: string; // dApp-configured network, CAIP-2 normalized
+  actual: string;   // wallet-reported network, CAIP-2 normalized
+  enforced: boolean; // true under guard|strict, false under off
+}
+```
+
+**Triggered by:**
+- A network mismatch detected at connect or restore time
+
+**Metrics mapping:**
+- No direct metric
+
+---
+
+### wallets:changed
+
+Emitted when the available wallet list changes, currently only from late or inject-time announce discovery.
+
+```typescript
+interface WalletsChangedEvent {
+  type: 'wallets:changed';
+  reason: 'announced';
+}
+```
+
+**Triggered by:**
+- A `canton:announceProvider` wallet appearing after the initial list was built
+
+**Metrics mapping:**
+- No direct metric
+
+---
+
 ## Event → Metric Mapping Table
 
 | Event | Condition | Metric |
@@ -191,6 +234,33 @@ interface PartyLayerError extends Error {
 | `error` | Always | `error_<code>` |
 | `connect()` call | Always | `wallet_connect_attempts` |
 | `restore()` call | Always | `restore_attempts` |
+
+---
+
+## Event telemetry bridge
+
+Separately from the increment-based metrics above, every emitted event is forwarded
+once to the configured telemetry adapter through `track(name, properties)`, from a
+single central path in the client. The telemetry name is the event's own `type`
+string. This is additive: the increment metrics are unchanged, and when no telemetry
+adapter is configured the bridge is a no-op.
+
+Only privacy-safe, non-identifying properties are sent. Session ids, party ids,
+transaction hashes, origins, and raw wallet payloads are never included; where an
+event's only distinguishing field is such an identifier, the property set is empty
+and the event count itself is the signal.
+
+| Event | Telemetry properties |
+|-------|----------------------|
+| `session:connected`      | `walletId`, `network` |
+| `session:disconnected`   | (none) |
+| `session:expired`        | (none) |
+| `session:networkMismatch`| `expected`, `actual`, `enforced` |
+| `tx:status`              | `status` |
+| `registry:status`        | `source`, `channel`, `verified`, `stale`, `sequence` |
+| `registry:updated`       | `channel`, `version` |
+| `error`                  | `code` (when the error carries one) |
+| `wallets:changed`        | `reason` |
 
 ---
 

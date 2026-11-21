@@ -20,11 +20,16 @@ import type {
   SignedMessage,
   SignedTransaction,
   TxReceipt,
+  LedgerApiParams,
+  LedgerApiResult,
   Session,
   PersistedSession,
   CapabilityKey,
   PartyId,
+  TransferIntent,
+  TransferResult,
 } from '@partylayer/core';
+import { normalizeLedgerMethodLower, ledgerApiBodyToObject, toTransferIntent } from '@partylayer/core';
 import {
   toWalletId,
   toPartyId,
@@ -33,6 +38,7 @@ import {
   WalletNotInstalledError,
   CapabilityNotSupportedError,
   mapUnknownErrorToPartyLayerError,
+  UserRejectedError,
 } from '@partylayer/core';
 
 // ─── Nightly Canton Types ───────────────────────────────────────────────────
@@ -129,6 +135,12 @@ export class NightlyAdapter implements WalletAdapter {
       'restore',
       'signMessage',
       'submitTransaction',
+      'ledgerApi',
+      // Nightly satisfies both halves of the transfer contract:
+      // createTransferCommand takes the intent verbatim (instrument AND its
+      // admin), and submitTransactionCommand reports an explicit approve or
+      // reject and carries the real update id on approval.
+      'transfer',
       'events',
       'injected',
     ];
@@ -140,18 +152,24 @@ export class NightlyAdapter implements WalletAdapter {
    */
   async detectInstalled(): Promise<AdapterDetectResult> {
     if (typeof window === 'undefined') {
-      return { installed: false, reason: 'Browser environment required' };
+      return {
+        installed: false,
+        availability: { kind: 'unknown', reason: 'No browser environment' },
+        reason: 'Browser environment required',
+      };
     }
 
     if (window.nightly?.canton) {
       return {
         installed: true,
+        availability: { kind: 'installed' },
         reason: 'Nightly wallet detected',
       };
     }
 
     return {
       installed: false,
+      availability: { kind: 'not-installed', install: 'https://nightly.app/download' },
       reason:
         'Nightly wallet not detected. Install from https://nightly.app/download',
     };
@@ -196,6 +214,9 @@ export class NightlyAdapter implements WalletAdapter {
         partyId,
         session: {
           walletId: this.walletId,
+          // The Nightly provider does not report the connected network → not
+          // wallet-reported, so network-mismatch detection is limited for this
+          // adapter (echoes the requested ctx.network).
           network: ctx.network,
           createdAt: Date.now(),
           metadata: {
@@ -289,7 +310,7 @@ export class NightlyAdapter implements WalletAdapter {
             response.type === SignRequestResponseType.SIGN_REQUEST_REJECTED
           ) {
             const data = response.data as { reason: string };
-            reject(new Error(`Sign rejected: ${data.reason}`));
+            reject(new UserRejectedError('signMessage', { walletId: 'nightly', originalMessage: data.reason }));
           } else {
             const data = response.data as { error: string };
             reject(new Error(`Sign error: ${data.error}`));
@@ -366,7 +387,7 @@ export class NightlyAdapter implements WalletAdapter {
               response.type === SignRequestResponseType.SIGN_REQUEST_REJECTED
             ) {
               const data = response.data as { reason: string };
-              reject(new Error(`Transaction rejected: ${data.reason}`));
+              reject(new UserRejectedError('submitTransaction', { walletId: 'nightly', originalMessage: data.reason }));
             } else {
               const data = response.data as { error: string };
               reject(new Error(`Transaction error: ${data.error}`));
@@ -375,19 +396,201 @@ export class NightlyAdapter implements WalletAdapter {
         },
       );
 
-      const hash =
-        result.updateId ||
-        result.signature ||
-        `tx_${Date.now()}_${Math.random().toString(36).substring(2, 10)}`;
-
+      // Approval and a signature are not ledger identifiers. Keep a real
+      // updateId when reported; otherwise return an unconfirmed acknowledgement.
+      const updateId =
+        typeof result?.updateId === 'string' && result.updateId.length > 0
+          ? result.updateId
+          : undefined;
       return {
-        transactionHash: toTransactionHash(hash),
         submittedAt: Date.now(),
+        ...(updateId ? { transactionHash: toTransactionHash(updateId), updateId } : {}),
       };
     } catch (err) {
       throw mapUnknownErrorToPartyLayerError(err, {
         walletId: this.walletId,
         phase: 'submitTransaction',
+        transport: 'injected',
+        details: { sessionId: session.sessionId },
+      });
+    }
+  }
+
+  /**
+   * Request a typed transfer.
+   *
+   * Nightly's own provider takes the intent almost verbatim:
+   * `createTransferCommand` accepts the receiving party, the amount, and the
+   * instrument WITH its administering party, then `submitTransactionCommand`
+   * puts it in front of the user and reports an explicit approve or reject. The
+   * wallet builds the command; PartyLayer builds nothing.
+   *
+   * On approval the wallet returns the real `updateId`. If it does not, this
+   * throws — the pre-existing `submitTransaction` path falls back to a
+   * signature and then to a generated string, and that fallback is exactly what
+   * this method must not do.
+   */
+  async requestTransfer(
+    ctx: AdapterContext,
+    session: Session,
+    intent: TransferIntent,
+  ): Promise<TransferResult> {
+    // Defensive: the client narrows before calling, but an adapter can be driven
+    // directly, and the allowlist is what keeps a caller-supplied option away
+    // from the wallet.
+    const safe = toTransferIntent(intent);
+    const memo = this.nightlyMemoFor(safe);
+
+    try {
+      if (!this.wallet) {
+        throw new Error('Not connected to Nightly Wallet');
+      }
+
+      ctx.logger.debug('Requesting transfer via Nightly Wallet', {
+        sessionId: session.sessionId,
+      });
+
+      const command = await this.wallet.createTransferCommand({
+        receiverPartyId: safe.receiver,
+        amount: safe.amount,
+        instrument: { id: safe.instrumentId.id, admin: safe.instrumentId.admin },
+        ...(memo === undefined ? {} : { memo }),
+        ...(safe.executeBefore === undefined ? {} : { expiryDate: safe.executeBefore }),
+      });
+
+      const approved = await new Promise<{ signature?: string; updateId?: string }>(
+        (resolve, reject) => {
+          this.wallet!.submitTransactionCommand(command, (response) => {
+            if (response.type === SignRequestResponseType.SIGN_REQUEST_APPROVED) {
+              resolve(response.data as { signature?: string; updateId?: string });
+            } else if (response.type === SignRequestResponseType.SIGN_REQUEST_REJECTED) {
+              const data = response.data as { reason: string };
+              // Nightly names the outcome in its protocol, so throw the typed
+              // error here rather than encoding it in prose and relying on the
+              // core mapper to recognise the word "rejected" — that coupling is
+              // what made every wallet-side refusal look like a user cancelling.
+              reject(new UserRejectedError('submitTransaction', { walletId: 'nightly', originalMessage: data.reason }));
+            } else {
+              const data = response.data as { error: string };
+              reject(new Error(`Transaction error: ${data.error}`));
+            }
+          });
+        },
+      );
+
+      if (!approved.updateId) {
+        throw new Error(
+          'Nightly Wallet approved the transfer but supplied no update id, so the transfer cannot be reported as committed.',
+        );
+      }
+
+      return {
+        updateId: approved.updateId,
+        partyId: session.partyId,
+      };
+    } catch (err) {
+      throw mapUnknownErrorToPartyLayerError(err, {
+        walletId: this.walletId,
+        phase: 'requestTransfer',
+        transport: 'injected',
+        details: { sessionId: session.sessionId },
+      });
+    }
+  }
+
+  /**
+   * Nightly's `memo` is a single string while a `TransferIntent.meta` is a map.
+   * Accept an absent/empty map, or exactly `{ memo }`; refuse anything else so
+   * metadata is never silently dropped from what the user approves.
+   */
+  private nightlyMemoFor(intent: TransferIntent): string | undefined {
+    const meta = intent.meta;
+    if (!meta) return undefined;
+    const keys = Object.keys(meta);
+    if (keys.length === 0) return undefined;
+    if (keys.length === 1 && keys[0] === 'memo') return meta.memo;
+    throw new CapabilityNotSupportedError(
+      this.walletId,
+      `transfer — Nightly carries a single "memo" string, not a metadata map; `
+      + `intent.meta has [${keys.join(', ')}]`,
+    );
+  }
+
+  /**
+   * Proxy a Ledger API request through the Nightly Wallet.
+   *
+   * Nightly's canton provider may expose ledgerApi or a generic request()
+   * method. We check at runtime — the interface is cast to include these
+   * optional methods that may be present in newer wallet versions.
+   */
+  async ledgerApi(
+    ctx: AdapterContext,
+    session: Session,
+    params: LedgerApiParams,
+  ): Promise<LedgerApiResult> {
+    try {
+      const provider = window.nightly?.canton as unknown as
+        | (NightlyCantonProvider & {
+            ledgerApi?: (p: { requestMethod: string; resource: string; body?: string | Record<string, unknown> }) => Promise<unknown>;
+            request?: (args: { method: string; params?: unknown }) => Promise<unknown>;
+          })
+        | undefined;
+
+      if (!provider) {
+        throw new Error('Not connected to Nightly Wallet');
+      }
+
+      // Nightly is a CIP-0103 RPC wallet — canonical dApp API shape: lower-case
+      // verb + an OBJECT body. The SDK boundary accepts both cases + a string
+      // body, so normalize here.
+      const requestMethod = normalizeLedgerMethodLower(params.requestMethod);
+      const body = ledgerApiBodyToObject(params.body);
+
+      ctx.logger.debug('Proxying ledger API request via Nightly Wallet', {
+        sessionId: session.sessionId,
+        requestMethod,
+        resource: params.resource,
+      });
+
+      if (typeof provider.ledgerApi === 'function') {
+        const result = await provider.ledgerApi({
+          requestMethod,
+          resource: params.resource,
+          body,
+        });
+        const response = result as { response?: string } | string;
+        return {
+          response: typeof response === 'string'
+            ? response
+            : (response?.response ?? JSON.stringify(response)),
+        };
+      }
+
+      if (typeof provider.request === 'function') {
+        const result = await provider.request({
+          method: 'ledgerApi',
+          params: {
+            requestMethod,
+            resource: params.resource,
+            body,
+          },
+        });
+        const response = result as { response?: string } | string;
+        return {
+          response: typeof response === 'string'
+            ? response
+            : (response?.response ?? JSON.stringify(response)),
+        };
+      }
+
+      throw new CapabilityNotSupportedError(
+        this.walletId,
+        'ledgerApi — update Nightly Wallet to a version that supports CIP-0103 ledgerApi',
+      );
+    } catch (err) {
+      throw mapUnknownErrorToPartyLayerError(err, {
+        walletId: this.walletId,
+        phase: 'ledgerApi',
         transport: 'injected',
         details: { sessionId: session.sessionId },
       });

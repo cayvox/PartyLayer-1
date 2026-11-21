@@ -123,6 +123,18 @@ const response = await transport.openConnectRequest(
 - ✅ State parameter validation
 - ✅ Popup closed detection
 
+### Session Restore (token-less)
+
+Popup/remote wallets surfaced through the **`discovery-adapter`** transport (e.g.
+Walley) typically **do not provide a reusable session token or public key**, and
+they don't need to. PartyLayer restores their session by **polling the wallet**
+(`status` / `listAccounts`) and persisting on a fresh connect, not by replaying a
+stored credential. Their adapter capabilities never include `events`.
+
+**Don't add your own "no token / no public key" check** in app code, a popup/remote
+wallet legitimately lacks one, and rejecting the connection on that basis breaks an
+otherwise-valid session. Let PartyLayer's poll-based restore handle it.
+
 ## PostMessage Transport
 
 ### Use Case
@@ -243,23 +255,94 @@ describe('DeepLinkTransport', () => {
 
 ### Integration Tests
 
-Use MockTransport for adapter integration tests:
+> **`useMockTransport` no longer exists.** This section used to tell you to pass
+> `useMockTransport` to an adapter's constructor. That option was removed from the
+> shipped adapters in `703a645` (the Cantor8 rebuild on its real SDK) — see
+> `packages/adapters/cantor8/CHANGELOG.md`. Passing it today does nothing, and on a
+> typed config it is a compile error. The instruction stood here after the option
+> was gone; this is the correction.
+
+`MockTransport` itself is still exported from `@partylayer/core` and is still the
+right tool for a **transport-level** test — one that drives `openConnectRequest`,
+`openSignRequest`, or `pollJobStatus` directly:
 
 ```typescript
-const adapter = new MyWalletAdapter({
-  useMockTransport: true,
-});
+import { MockTransport } from '@partylayer/core';
+
+const transport = new MockTransport();
+transport.setMockResponse('connected', { /* ConnectResponse */ });
+// Drive the transport directly; there is no adapter config flag for this.
 ```
 
 ### E2E Tests
 
-Use MockTransport in demo app for E2E tests:
+Do **not** reach for a mock flag or an environment switch. The demo's end-to-end
+mocking works at the provider boundary instead: `apps/demo/public/mock-cip0103-wallet.js`
+assigns a real CIP-0103 provider to `window.canton.demoWallet` from a synchronous
+script tag, before hydration, the way an extension content script would. The demo
+registers `CantonDemoWalletAdapter` over it, and the e2e helper
+`connectToMockWallet()` drives it.
+
+That fixture is gated on `process.env.NODE_ENV !== 'production'`, so it never
+reaches a production bundle.
+
+Prefer this shape for anything new. A fixture at the transport boundary exercises
+discovery, announce, the adapter contract, connect and restore through the same
+path a real wallet takes. A configuration flag threaded through an adapter
+constructor bypasses that boundary and tests less, which is why the flag was
+removed rather than repaired.
+
+### Known gap: no end-to-end coverage of popup or relay transports
+
+**What is covered.** The injected/announce family. The demo's provider fixture
+sits at `window.canton`, so every test that connects — session persistence,
+sign-and-bridge, the full connect flow — drives discovery, the adapter contract,
+connect and restore through the real code path.
+
+**What is not.** Popup and relay. Nothing exercises `openConnectRequest`,
+`openSignRequest` or `pollJobStatus` end-to-end. Concretely, the wallets that
+connect by opening a popup (Cauri, OneSwap, Walley) are asserted only as far as
+the picker — that they are offered — and never through a connect. WalletConnect's
+spec self-skips when no relay is reachable, which in practice is always in CI.
+
+Two specs that named parts of this gap were deleted rather than left standing,
+because a disabled test hides a gap behind a filename:
+
+- `cantor8-connect.spec.ts` — Cantor8's deep-link connect. Disabled from birth
+  waiting on a switch that had been removed (`703a645`), and written against a
+  DOM that no longer matches (`page.locator('ul').filter(...)`). Cantor8's
+  presence in the picker is covered by `wallets/send.spec.ts`; its **connect** is
+  not covered by anything.
+- `bron-remote-signer.spec.ts` — Bron's remote-signer connect and sign. Its body
+  ended in a bare `test.skip()` on "Bron not available", which is always: the
+  demo deliberately registers no Bron adapter, since Bron needs OAuth credentials
+  a public demo cannot ship. No e2e in this app can ever cover Bron. The adapter's
+  own unit suite is the only place that can.
+
+This is a real gap, not an oversight to be argued away. It is written down here
+because the alternative is that it stays invisible: the suite reports green, and
+green over an untested transport family reads the same as green over a tested one.
+
+**The shape a fix must take.** A fixture at the transport boundary — a stub popup
+window or relay endpoint that the real transport talks to — using the
+`MockTransport` building block already exported from `@partylayer/core`.
+
+**The shape it must not take.** A constructor flag or an environment switch that
+selects a mock at runtime. We had one (`useMockTransport`), it was removed in
+`703a645`, and it should not come back. An env-keyed mock branch is reachable from
+a production bundle, so it trades a real risk in shipped code for convenience in
+tests. That trade is wrong even when the switch would buy coverage we want, and
+the coverage argument is exactly the one that will be made for it next time.
+
+**Playwright: use `domcontentloaded`, not `networkidle`.** The PartyLayer client
+keeps background connections open (provider channels, registry/SWR), so a page
+**never reaches `networkidle`** and `page.goto(url, { waitUntil: 'networkidle' })`
+hangs or captures an empty render. Wait on `'domcontentloaded'` (plus an explicit
+`waitForSelector` / `waitFor` for the element you assert):
 
 ```typescript
-// In demo app
-const adapter = new Cantor8Adapter({
-  useMockTransport: process.env.NEXT_PUBLIC_MOCK_WALLETS === '1',
-});
+await page.goto(url, { waitUntil: 'domcontentloaded' });
+await page.getByRole('button', { name: /Connect Wallet/i }).waitFor();
 ```
 
 ## Best Practices

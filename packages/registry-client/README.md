@@ -18,7 +18,7 @@
 
 ### Features
 
-- **Signed Registry**: Verifies registry signature to prevent tampering
+- **Signature Verification**: Ed25519 verification is implemented, but it runs only when you pass `registryPublicKeys`, and no signature is published today (see `SIGNING.md`)
 - **Automatic Caching**: Reduces network requests with configurable TTL
 - **Schema Validation**: Ensures registry entries match expected format
 - **Stale Fallback**: Uses cached data when network is unavailable
@@ -41,11 +41,12 @@ npm install @partylayer/registry-client
 import { RegistryClient } from '@partylayer/registry-client';
 
 const registry = new RegistryClient({
-  url: 'https://registry.partylayer.xyz/v1/wallets.json',
+  registryUrl: 'https://registry.partylayer.xyz',
+  channel: 'stable',
 });
 
 const wallets = await registry.getWallets();
-// [{ id: 'console', name: 'Console Wallet', icon: '...', ... }, ...]
+// [{ walletId: 'console', name: 'Console Wallet', icons: { ... }, ... }, ...]
 ```
 
 ---

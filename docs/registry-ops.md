@@ -17,7 +17,42 @@ This guide covers how to safely update, promote, and rollback the wallet registr
    pnpm build
    ```
 
+
+## `ERR_ABORTED` on registry.json in the console is not a failed fetch
+
+In development you will see one or two aborted requests for
+`/v1/<channel>/registry.json` in the browser console:
+
+```
+GET .../registry/v1/stable/registry.json   net::ERR_ABORTED
+```
+
+**This is React StrictMode double-mounting**, not a broken registry. StrictMode
+mounts every component twice in dev; the first mount's in-flight fetch is
+aborted when it unmounts, and the second one completes. The registry loads fine —
+the wallet list renders, and the same page served over `curl` returns HTTP 200
+with the full document.
+
+It is called out here because it reads exactly like a failed network request to
+anyone scanning a console, and time has been lost to it. Two checks settle it in
+seconds:
+
+```bash
+curl -s -o /dev/null -w '%{http_code} %{size_download}\n' \
+  http://localhost:3000/registry/v1/stable/registry.json      # expect: 200 10330
+```
+
+and: does the picker actually list wallets? If it does, the registry loaded.
+
+A genuinely broken registry fetch looks different — `RegistryFetchFailedError`
+surfaced through the SDK, an empty or fallback wallet list, and a non-200 status
+on that URL. Production builds do not run StrictMode, so this does not appear
+there at all.
+
+
 ## Common Operations
+
+Wallet logos live in `registry/wallets/`; see [registry/wallets/NOTICE.md](../registry/wallets/NOTICE.md) for the trademark notice that covers those marks.
 
 ### Add a New Wallet
 
@@ -85,7 +120,7 @@ partylayer-registry sign --channel stable --key registry/keys/dev.key
 partylayer-registry bump-sequence --channel stable
 
 # Sign
-partylayer-registry sign --channel stable --key registry/keys/dev.pub
+partylayer-registry sign --channel stable --key registry/keys/dev.key
 ```
 
 ## Key Rotation
@@ -212,6 +247,20 @@ DEPLOY_MODE=static pnpm start
 
 This prints file locations to serve via CDN.
 
+## Cache Policy (CDN)
+
+The registry is served by Cloudflare Pages at `registry.partylayer.xyz`. Caching is set by `registry/_headers` and `registry/_worker.js`, per path type:
+
+- **Manifest** (`/v1/<channel>/registry.json`): `max-age=60`, set in `_worker.js`. Short on purpose, so a new entry, a promotion, or an icon correction reaches users within about a minute. It is set in the worker rather than `_headers` because Pages combines Cache-Control across every matching `_headers` rule, which would concatenate the `/*.json` `max-age=300` with a manifest `max-age=60` into an ambiguous header. ETags are present, so most of these loads are `304 Not Modified` with no body.
+- **Icons** (`/wallets/*`): `max-age=3600` (one hour), with plain, human-readable filenames. Icons revalidate against their ETag once an hour, which is a `304` (about 950 bytes of headers, no image body), so the bandwidth cost is negligible for eight marks totalling roughly 49 KB. A corrected mark therefore propagates within an hour with no cache purge and no build tooling. Filenames stay plain (no content hash) because contributors add their `icon` URL by hand in their registry PR, per the generic bridge guide, and a hashed URL would make that contribution worse.
+- **Not found**: the worker returns a real `404` with `Cache-Control: no-store`. It must never return the index page as a `200`.
+
+### Why the not-found rule exists
+
+This is not a style choice; it is here because of a real incident. Pages was serving the SPA index fallback as `200 text/html` for any missing path, and that HTML inherited the one-day `/wallets/*` cache. So a request to a mark URL before it was deployed (a diagnostic curl, or a consumer loading a just-added wallet a moment early) cached a not-found as a success for 24 hours. The symptom was a wallet icon falling back to the neutral glyph on production while the file was present and valid at the origin, with no way for the person seeing it to tell a stale cache from a missing file. The worker now detects a file request (a path with a non-HTML extension) that came back as the HTML fallback and returns an uncacheable 404 instead.
+
+If you change a header here, keep three invariants: the manifest stays short, icons stay revalidated rather than immutable (so a correction needs no purge), and a missing path is a non-cacheable 404, never a cached 200.
+
 ## Security Best Practices
 
 1. **Never commit private keys** - Add `registry/keys/*.key` to `.gitignore`
@@ -243,5 +292,4 @@ This prints file locations to serve via CDN.
 
 ## See Also
 
-- [Phase 4 Summary](./PHASE4_SUMMARY.md) - Operational runbook
 - [Release Process](./releasing.md) - Package versioning and publishing

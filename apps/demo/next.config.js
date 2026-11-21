@@ -3,6 +3,21 @@ const path = require('path');
 
 const nextConfig = {
   reactStrictMode: true,
+  // /docs is the introduction page itself (apps/demo/src/app/docs/page.tsx), so
+  // the old /docs/introduction URL consolidates into it. Declared here rather
+  // than as a redirect() inside a page component: a redirect() in a statically
+  // prerendered server component deploys as a 307 with no Location header and
+  // an error-shell body. A redirects() entry is resolved at the edge and emits
+  // a real 301 with a real Location.
+  async redirects() {
+    return [
+      { source: '/docs/introduction', destination: '/docs', statusCode: 301 },
+    ];
+  },
+  // Produce a self-contained standalone server bundle for host-node deployment.
+  output: 'standalone',
+  // Next 15 makes tracing root a stable top-level option.
+  outputFileTracingRoot: path.resolve(__dirname, '../../'),
   transpilePackages: [
     '@partylayer/react',
     '@partylayer/sdk',
@@ -15,10 +30,6 @@ const nextConfig = {
     '@partylayer/adapter-nightly',
     '@partylayer/provider',
   ],
-  // Ensure ESM packages work correctly
-  experimental: {
-    esmExternals: 'loose',
-  },
   // Webpack configuration to resolve workspace packages
   webpack: (config, { isServer, dev }) => {
     // Use memory cache in dev to prevent stale chunk errors after file edits
@@ -29,9 +40,14 @@ const nextConfig = {
     // Resolve workspace packages
     config.resolve.alias = {
       ...config.resolve.alias,
-      '@partylayer/react': path.resolve(__dirname, '../../packages/react'),
+      // Workspace library tests still use React 18. The application and every
+      // transpiled library must share ONE React Query context under React 19.
+      '@tanstack/react-query': path.dirname(require.resolve('@tanstack/react-query/package.json')),
+      // Exact-match ($) so bare `@partylayer/react` resolves here as before, while
+      // subpaths like `@partylayer/react/query` fall through to the package exports.
+      '@partylayer/react$': path.resolve(__dirname, '../../packages/react'),
       '@partylayer/sdk': path.resolve(__dirname, '../../packages/sdk'),
-      '@partylayer/core': path.resolve(__dirname, '../../packages/core'),
+      '@partylayer/core$': path.resolve(__dirname, '../../packages/core'),
       '@partylayer/registry-client': path.resolve(__dirname, '../../packages/registry-client'),
       '@partylayer/adapter-console': path.resolve(__dirname, '../../packages/adapters/console'),
       '@partylayer/adapter-loop': path.resolve(__dirname, '../../packages/adapters/loop'),

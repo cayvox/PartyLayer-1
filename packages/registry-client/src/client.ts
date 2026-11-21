@@ -17,6 +17,7 @@ import type { WalletInfo } from '@partylayer/core';
 import {
   RegistryFetchFailedError,
   RegistryVerificationFailedError,
+  RegistrySignatureMissingError,
   RegistrySchemaInvalidError,
   WalletNotFoundError,
 } from '@partylayer/core';
@@ -32,6 +33,33 @@ import {
   registryEntryToWalletInfo,
 } from './schema';
 import type { RegistryStatus, CachedRegistry, LastFetchAttempt } from './status';
+
+/**
+ * What the client established about the manifest's signature on this fetch.
+ *
+ * A discriminated union rather than a boolean, deliberately. `verified` and
+ * `reused-verified` are the only variants that mean "checked against a key",
+ * and neither is constructible without having done the check: the code cannot
+ * express success it did not earn. The previous shape was a
+ * `RegistrySignature` object that failure paths filled with empty strings and
+ * returned alongside a hardcoded `verified: true`.
+ */
+export type SignatureOutcome =
+  /** Bytes from this fetch were checked against a configured key and matched. */
+  | { kind: 'verified'; signature: RegistrySignature }
+  /** 304: the served bytes are the ones we already verified and cached. */
+  | { kind: 'reused-verified' }
+  /** No public keys configured, so nothing was checked. Not a success. */
+  | { kind: 'not-required' }
+  /** The endpoint answered and said no signature is published (404/410). */
+  | { kind: 'missing'; url: string }
+  /** The endpoint could not be reached or failed. An outage, not a verdict. */
+  | { kind: 'unavailable'; url: string; cause: unknown };
+
+/** One construction site for the unavailable variant, rather than three. */
+function unavailable(url: string, cause: unknown): SignatureOutcome {
+  return { kind: 'unavailable', url, cause };
+}
 
 /**
  * Registry client options
@@ -79,6 +107,8 @@ export class RegistryClient {
   private fetchFn: typeof fetch;
   private fetchTimeout: number;
   private storage?: RegistryClientOptions['storage'];
+  private storageLoad: Promise<void>;
+  private cacheGeneration = 0;
 
   // In-memory cache
   private memoryCache: {
@@ -97,7 +127,7 @@ export class RegistryClient {
   constructor(options: RegistryClientOptions = {}) {
     this.baseUrl = options.registryUrl || DEFAULT_REGISTRY_URL;
     this.channel = options.channel || 'stable';
-    this.publicKeys = options.registryPublicKeys || [];
+    this.publicKeys = [...(options.registryPublicKeys || [])];
     this.cacheTtl = options.cacheTtl || 60 * 60 * 1000; // 1 hour
     this.staleTtl = options.staleTtl || 24 * 60 * 60 * 1000; // 24 hours
     this.enableCache = options.enableCache !== false;
@@ -116,11 +146,7 @@ export class RegistryClient {
     this.storage = options.storage;
 
     // Load from persistent storage if available
-    if (this.storage) {
-      this.loadFromStorage().catch(() => {
-        // Ignore errors on load
-      });
-    }
+    this.storageLoad = this.storage ? this.initializeStorage() : Promise.resolve();
   }
 
   /**
@@ -135,6 +161,11 @@ export class RegistryClient {
    */
   private getSignatureUrl(): string {
     return `${this.baseUrl}/v1/${this.channel}/registry.sig`;
+  }
+
+  private storageKey(): string {
+    // Legacy channel-only caches did not retain signed bytes or isolate origins.
+    return `registry_v2_${encodeURIComponent(this.getRegistryUrl())}`;
   }
 
   /**
@@ -201,12 +232,32 @@ export class RegistryClient {
   }
 
   /**
-   * Fetch registry and signature from network
+   * Fetch the manifest and its signature AS A UNIT, and verify the signature
+   * against the exact bytes this call received.
+   *
+   * Three things this shape is for, each of which was a real defect:
+   *
+   *  - The signature covers the exact UTF-8 bytes of registry.json. Fetching
+   *    the two independently let a client pair a fresh manifest with a stale
+   *    signature and fail verification on a correctly signed pair. The CDN
+   *    served them with different max-age values, so the window was real, not
+   *    theoretical. Verifying what THIS call fetched removes the class of bug
+   *    rather than the instance: a future cache-header change cannot bring it
+   *    back.
+   *
+   *  - A 304 no longer shortcuts verification. See `canReuseCached`.
+   *
+   *  - There is no way to report a signature without having one. The result
+   *    carries a `SignatureOutcome`, whose `verified` variant is only
+   *    constructible after `verifyRegistrySignature` has actually returned
+   *    true. The old code fabricated `{ signature: '', keyFingerprint: '' }`
+   *    on the failure paths and returned it as though nothing was wrong.
    */
   private async fetchFromNetwork(): Promise<{
     registry: WalletRegistryV1;
-    signature: RegistrySignature;
+    outcome: SignatureOutcome;
     etag?: string;
+    registryJson?: string;
   }> {
     const registryUrl = this.getRegistryUrl();
     const sigUrl = this.getSignatureUrl();
@@ -217,117 +268,144 @@ export class RegistryClient {
     const timeoutId = setTimeout(() => controller.abort(), this.fetchTimeout);
 
     try {
-    // Fetch registry (always required)
-    const registryResponse = await this.fetchFn(registryUrl, {
-      headers: {
-        'Accept': 'application/json',
-        'If-None-Match': this.memoryCache.lastKnownGood?.etag || '',
-      },
-      signal: controller.signal,
-    });
+      const cached = this.memoryCache.lastKnownGood;
 
-    // Handle 304 Not Modified
-    if (registryResponse.status === 304) {
-      if (this.memoryCache.lastKnownGood) {
-        // For 304, we still need a signature object for return type
-        // In dev mode, create dummy signature (skip fetch entirely)
-        let signature: RegistrySignature;
-        if (requireSignature) {
-          // Production mode: try to fetch signature
-          try {
-            const sigResponse = await this.fetchFn(sigUrl, {
-              headers: { 'Accept': 'application/json' },
-              signal: controller.signal,
-            });
-            if (sigResponse.ok) {
-              signature = JSON.parse(await sigResponse.text()) as RegistrySignature;
-            } else {
-              // Signature missing but we have cache - use dummy
-              signature = { algorithm: 'ed25519', signature: '', keyFingerprint: '', signedAt: new Date().toISOString() };
-            }
-          } catch {
-            signature = { algorithm: 'ed25519', signature: '', keyFingerprint: '', signedAt: new Date().toISOString() };
-          }
-        } else {
-          // Dev mode: create dummy signature
-          signature = { algorithm: 'ed25519', signature: '', keyFingerprint: '', signedAt: new Date().toISOString() };
-        }
-        
-        return {
-          registry: this.memoryCache.lastKnownGood.registry,
-          signature,
-          etag: this.memoryCache.lastKnownGood.etag,
-        };
-      }
-    }
+      // WHAT A 304 MEANS WHEN A SIGNATURE IS REQUIRED.
+      //
+      // 304 says only that the manifest bytes are unchanged from the ones our
+      // ETag names. That is enough to reuse a cached entry we ALREADY verified,
+      // because the bytes we verified are the bytes still being served. It is
+      // not enough to call an unverified entry verified: nothing has been
+      // checked against a key.
+      //
+      // So we only offer If-None-Match when the entry it would revalidate is
+      // one we could legitimately reuse. When signatures are required and the
+      // cached entry is unverified, we deliberately ask for the full body so
+      // there is something to verify. Cheaper than the alternative, which is
+      // reporting success we did not earn.
+      const canReuseCached = cached !== null && (!requireSignature || cached.verified);
 
-    if (!registryResponse.ok) {
-      throw new RegistryFetchFailedError(
-        registryUrl,
-        new Error(`${registryResponse.status} ${registryResponse.statusText}`)
-      );
-    }
-
-    const registryJson = await registryResponse.text();
-    const registry = JSON.parse(registryJson) as WalletRegistryV1;
-    const etag = registryResponse.headers.get('ETag') || undefined;
-
-    // Validate schema
-    if (!validateRegistry(registry)) {
-      throw new RegistrySchemaInvalidError(
-        'Invalid registry schema',
-        { url: registryUrl }
-      );
-    }
-
-    // Fetch signature (skip entirely in dev mode when no public keys)
-    let signature: RegistrySignature;
-    
-    if (requireSignature) {
-      // Public keys configured - signature is required
-      const sigResponse = await this.fetchFn(sigUrl, {
+      const registryResponse = await this.fetchFn(registryUrl, {
         headers: {
-          'Accept': 'application/json',
+          Accept: 'application/json',
+          ...(canReuseCached && cached?.etag ? { 'If-None-Match': cached.etag } : {}),
         },
         signal: controller.signal,
       });
 
-      if (!sigResponse.ok) {
+      if (registryResponse.status === 304) {
+        // Only reachable when we sent If-None-Match, which we only do when the
+        // cached entry is reusable. Assert rather than assume: a proxy that
+        // answers 304 to a request without a validator would otherwise hand us
+        // an unverified entry to report as verified.
+        if (!canReuseCached || !cached) {
+          throw new RegistryFetchFailedError(
+            registryUrl,
+            new Error('304 without a usable validator'),
+          );
+        }
+        return {
+          registry: cached.registry,
+          outcome: cached.verified
+            ? { kind: 'reused-verified' }
+            : { kind: 'not-required' },
+          etag: cached.etag,
+          registryJson: cached.registryJson,
+        };
+      }
+
+      if (!registryResponse.ok) {
         throw new RegistryFetchFailedError(
-          sigUrl,
-          new Error(`${sigResponse.status} ${sigResponse.statusText}`)
+          registryUrl,
+          new Error(`${registryResponse.status} ${registryResponse.statusText}`),
         );
       }
-      signature = JSON.parse(await sigResponse.text()) as RegistrySignature;
-      
-      // Verify signature
-      const verified = await this.verifyRegistrySignature(registryJson, signature);
-      if (!verified) {
-        throw new RegistryVerificationFailedError(
-          'Signature verification failed',
-          { url: registryUrl }
-        );
-      }
-    } else {
-      // Dev mode: skip signature fetch entirely, create dummy signature
-      console.log('[RegistryClient] Dev mode: skipping signature fetch (no public keys configured)');
-      signature = { algorithm: 'ed25519', signature: '', keyFingerprint: '', signedAt: new Date().toISOString() };
-    }
 
-    // Check sequence number (prevent downgrades)
-    if (this.memoryCache.lastKnownGood) {
-      if (registry.metadata.sequence < this.memoryCache.lastKnownGood.sequence) {
-        throw new RegistryVerificationFailedError(
-          `Sequence downgrade detected: ${registry.metadata.sequence} < ${this.memoryCache.lastKnownGood.sequence}`,
-          { url: registryUrl }
-        );
-      }
-    }
+      const registryJson = await registryResponse.text();
+      const registry = JSON.parse(registryJson) as WalletRegistryV1;
+      const etag = registryResponse.headers.get('ETag') || undefined;
 
-    return { registry, signature, etag };
+      if (!validateRegistry(registry)) {
+        throw new RegistrySchemaInvalidError('Invalid registry schema', { url: registryUrl });
+      }
+
+      // Sequence check before verification: a downgrade is a downgrade whether
+      // or not the bytes are signed, and it is cheaper to detect.
+      if (this.memoryCache.lastKnownGood) {
+        if (registry.metadata.sequence < this.memoryCache.lastKnownGood.sequence) {
+          throw new RegistryVerificationFailedError(
+            `Sequence downgrade detected: ${registry.metadata.sequence} < ${this.memoryCache.lastKnownGood.sequence}`,
+            { url: registryUrl },
+          );
+        }
+      }
+
+      const outcome = await this.establishSignature(registryJson, sigUrl, requireSignature, controller);
+      return { registry, outcome, etag, registryJson };
     } finally {
       clearTimeout(timeoutId);
     }
+  }
+
+  /**
+   * Resolve the signature for bytes we just fetched.
+   *
+   * Separates three outcomes the old code collapsed into one:
+   *
+   *   missing      the endpoint answered and said it is not there (404/410).
+   *                A deployment state: signing not published for this channel.
+   *   unavailable  the endpoint could not be reached, or failed (5xx, network,
+   *                timeout). An outage, and the caller may fall back to a
+   *                previously verified cache rather than going dark.
+   *   verified     bytes checked against a configured key and matched.
+   *
+   * A signature that is present and does NOT verify is not an outcome at all:
+   * it throws, and it keeps throwing all the way out. That is the one case
+   * signature checking exists to catch.
+   */
+  private async establishSignature(
+    registryJson: string,
+    sigUrl: string,
+    requireSignature: boolean,
+    controller: AbortController,
+  ): Promise<SignatureOutcome> {
+    if (!requireSignature) {
+      // No keys configured, so nothing was checked. Reported honestly rather
+      // than as success; `status.verified` is false in this mode.
+      return { kind: 'not-required' };
+    }
+
+    let sigResponse: Response;
+    try {
+      sigResponse = await this.fetchFn(sigUrl, {
+        headers: { Accept: 'application/json' },
+        signal: controller.signal,
+      });
+    } catch (cause) {
+      return unavailable(sigUrl, cause);
+    }
+
+    if (sigResponse.status === 404 || sigResponse.status === 410) {
+      return { kind: 'missing', url: sigUrl };
+    }
+    if (!sigResponse.ok) {
+      return unavailable(sigUrl, new Error(`${sigResponse.status} ${sigResponse.statusText}`));
+    }
+
+    let signature: RegistrySignature;
+    try {
+      signature = JSON.parse(await sigResponse.text()) as RegistrySignature;
+    } catch (cause) {
+      return unavailable(sigUrl, cause);
+    }
+
+    const verified = await this.verifyRegistrySignature(registryJson, signature);
+    if (!verified) {
+      throw new RegistryVerificationFailedError('Signature verification failed', {
+        url: sigUrl,
+      });
+    }
+    return { kind: 'verified', signature };
   }
 
   /**
@@ -336,6 +414,7 @@ export class RegistryClient {
    * - Refreshes in background
    */
   async getRegistry(): Promise<WalletRegistryV1> {
+    await this.storageLoad;
     // Return cached immediately if available
     if (this.memoryCache.lastKnownGood) {
       const now = Date.now();
@@ -346,6 +425,7 @@ export class RegistryClient {
         // Trigger background refresh if not already refreshing
         if (!this.memoryCache.refreshPromise) {
           this.memoryCache.refreshPromise = this.refreshRegistry();
+          void this.memoryCache.refreshPromise.catch(() => { /* Error remains available through getStatus(). */ });
         }
         return this.memoryCache.lastKnownGood.registry;
       }
@@ -355,6 +435,7 @@ export class RegistryClient {
         // Trigger refresh
         if (!this.memoryCache.refreshPromise) {
           this.memoryCache.refreshPromise = this.refreshRegistry();
+          void this.memoryCache.refreshPromise.catch(() => { /* Error remains available through getStatus(). */ });
         }
         return this.memoryCache.lastKnownGood.registry;
       }
@@ -375,21 +456,51 @@ export class RegistryClient {
 
     const refreshPromise = (async () => {
       try {
-        const { registry, etag } = await this.fetchFromNetwork();
+        const { registry, outcome, etag, registryJson } = await this.fetchFromNetwork();
+        const requireSignature = this.publicKeys.length > 0;
 
-        console.log('[RegistryClient] Successfully fetched registry:', {
-          channel: registry.metadata.channel,
-          sequence: registry.metadata.sequence,
-          walletCount: registry.wallets.length,
-        });
+        // A signature that is required but absent, or that could not be
+        // fetched, is not a reason to report success. It is also not a reason
+        // to go dark: if we hold an entry we previously verified, the caller
+        // keeps working on it and the error surfaces through status. Only when
+        // there is nothing verified to fall back on does this throw, and it
+        // throws a DIFFERENT error for "not published" than for "unreachable"
+        // so an operator can tell a deployment gap from an outage.
+        if (requireSignature && (outcome.kind === 'missing' || outcome.kind === 'unavailable')) {
+          const usable = this.memoryCache.lastKnownGood;
+          if (usable && usable.verified) {
+            this.updateStatus({
+              source: 'cache',
+              verified: true,
+              channel: usable.registry.metadata.channel,
+              sequence: usable.sequence,
+              stale: Date.now() - usable.fetchedAt > this.cacheTtl,
+              fetchedAt: usable.fetchedAt,
+              etag: usable.etag,
+            });
+            return usable.registry;
+          }
+          throw outcome.kind === 'missing'
+            ? new RegistrySignatureMissingError(outcome.url)
+            : new RegistryFetchFailedError(outcome.url, outcome.cause);
+        }
+
+        // Truthful, not hardcoded. In dev mode (no keys configured) this is
+        // false, because nothing was checked, and `status.verified` says so.
+        // Both variants mean a signature was checked against a key: one on
+        // this fetch, one when the reused entry was stored.
+        const verified = outcome.kind === 'verified' || outcome.kind === 'reused-verified';
 
         // Update cache
         const cached: CachedRegistry = {
           registry,
-          verified: true,
+          verified,
           fetchedAt: Date.now(),
           etag,
           sequence: registry.metadata.sequence,
+          registryJson,
+          signature: outcome.kind === 'verified' ? outcome.signature :
+            outcome.kind === 'reused-verified' ? this.memoryCache.lastKnownGood?.signature : undefined,
         };
 
         this.memoryCache.lastKnownGood = cached;
@@ -400,7 +511,7 @@ export class RegistryClient {
         // Update status
         this.updateStatus({
           source: 'network',
-          verified: true,
+          verified,
           channel: registry.metadata.channel,
           sequence: registry.metadata.sequence,
           stale: false,
@@ -419,7 +530,9 @@ export class RegistryClient {
         this.memoryCache.lastAttempt = {
           fetchedAt: Date.now(),
           errorCode:
-            error instanceof RegistryFetchFailedError
+            error instanceof RegistrySignatureMissingError
+              ? 'REGISTRY_SIGNATURE_MISSING'
+              : error instanceof RegistryFetchFailedError
               ? 'REGISTRY_FETCH_FAILED'
               : error instanceof RegistryVerificationFailedError
                 ? 'REGISTRY_VERIFICATION_FAILED'
@@ -427,6 +540,31 @@ export class RegistryClient {
                   ? 'REGISTRY_SCHEMA_INVALID'
                   : 'UNKNOWN',
         };
+
+        // A FAILED VERIFICATION IS NEVER SWALLOWED.
+        //
+        // Every other failure here may fall back to the last known good entry,
+        // because an outage should not take wallet discovery down. This one may
+        // not: bytes were served that do not match the key, which is precisely
+        // what signature checking exists to detect. Falling back would leave the
+        // app working, the operator uninformed, and the tampering undetected,
+        // which is the same as not checking at all. It propagates.
+        if (error instanceof RegistryVerificationFailedError) {
+          const lkg = this.memoryCache.lastKnownGood;
+          if (lkg) {
+            this.updateStatus({
+              source: 'cache',
+              verified: lkg.verified,
+              channel: lkg.registry.metadata.channel,
+              sequence: lkg.sequence,
+              stale: Date.now() - lkg.fetchedAt > this.cacheTtl,
+              fetchedAt: lkg.fetchedAt,
+              etag: lkg.etag,
+              error,
+            });
+          }
+          throw error;
+        }
 
         // Update status with error
         const lastKnownGood = this.memoryCache.lastKnownGood;
@@ -498,7 +636,7 @@ export class RegistryClient {
   private async saveToStorage(cached: CachedRegistry): Promise<void> {
     if (!this.storage) return;
 
-    const key = `registry_${this.channel}`;
+    const key = this.storageKey();
     const value = JSON.stringify(cached);
     await this.storage.set(key, value);
   }
@@ -506,15 +644,43 @@ export class RegistryClient {
   /**
    * Load from persistent storage
    */
-  private async loadFromStorage(): Promise<void> {
+  private async initializeStorage(): Promise<void> {
+    const generation = this.cacheGeneration;
+    let active = true;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      // An unavailable storage backend must not indefinitely block discovery.
+      await Promise.race([
+        this.loadFromStorage(() => active && generation === this.cacheGeneration),
+        new Promise<void>(resolve => { timer = setTimeout(resolve, Math.min(1000, this.fetchTimeout)); }),
+      ]);
+    } catch { /* Cache failures fall through to the network. */ }
+    finally { active = false; if (timer) clearTimeout(timer); }
+  }
+
+  private async loadFromStorage(isCurrent: () => boolean): Promise<void> {
     if (!this.storage) return;
 
-    const key = `registry_${this.channel}`;
+    const key = this.storageKey();
     const value = await this.storage.get(key);
     if (value) {
       try {
+        if (value.length > 8_000_000) return;
         const cached = JSON.parse(value) as CachedRegistry;
-        this.memoryCache.lastKnownGood = cached;
+        if (!Number.isSafeInteger(cached.fetchedAt) || cached.fetchedAt > Date.now() || Date.now() - cached.fetchedAt >= this.staleTtl) return;
+        // Never trust stored booleans/objects. Recheck the signed bytes using
+        // the current roots, and parse those bytes rather than cached.registry.
+        const registry = cached.registryJson ? JSON.parse(cached.registryJson) : cached.registry;
+        if (!validateRegistry(registry) || registry.metadata.channel !== this.channel || cached.sequence !== registry.metadata.sequence) return;
+        let verified = false;
+        if (this.publicKeys.length) {
+          if (!cached.registryJson || !cached.signature || !(await this.verifyRegistrySignature(cached.registryJson, cached.signature))) return;
+          verified = true;
+        }
+        if (!isCurrent() || this.memoryCache.lastKnownGood) return;
+        this.memoryCache.lastKnownGood = { registry, verified, fetchedAt: cached.fetchedAt, sequence: registry.metadata.sequence,
+          etag: typeof cached.etag === 'string' ? cached.etag : undefined,
+          registryJson: cached.registryJson, signature: verified ? cached.signature : undefined };
       } catch {
         // Ignore parse errors
       }
@@ -570,13 +736,14 @@ export class RegistryClient {
    * Clear cache
    */
   clearCache(): void {
+    this.cacheGeneration++;
     this.memoryCache.lastKnownGood = null;
     this.memoryCache.lastAttempt = null;
     this.memoryCache.refreshPromise = null;
     this.currentStatus = null;
 
     if (this.storage) {
-      this.storage.remove(`registry_${this.channel}`).catch(() => {
+      this.storage.remove(this.storageKey()).catch(() => {
         // Ignore errors
       });
     }

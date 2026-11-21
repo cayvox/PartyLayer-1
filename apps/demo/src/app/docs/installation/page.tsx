@@ -3,7 +3,7 @@ import InstallationContent from './content';
 
 const title = 'Installation Guide';
 const description =
-  'Install PartyLayer SDK via npm, pnpm, or yarn. Peer dependencies, React setup, and Vanilla JS configuration for Canton wallet integration.';
+  'Install the Canton wallet kit in one command. Compare React, Next.js, Vue, TypeScript and React Native setup, wallet requirements and installation recovery.';
 const url = 'https://partylayer.xyz/docs/installation';
 
 export const metadata: Metadata = {
@@ -18,7 +18,7 @@ const breadcrumbJsonLd = {
   '@type': 'BreadcrumbList',
   itemListElement: [
     { '@type': 'ListItem', position: 1, name: 'Home', item: 'https://partylayer.xyz' },
-    { '@type': 'ListItem', position: 2, name: 'Docs', item: 'https://partylayer.xyz/docs/introduction' },
+    { '@type': 'ListItem', position: 2, name: 'Docs', item: 'https://partylayer.xyz/docs' },
     { '@type': 'ListItem', position: 3, name: 'Installation' },
   ],
 };

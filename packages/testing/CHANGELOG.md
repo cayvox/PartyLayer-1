@@ -1,0 +1,185 @@
+# @partylayer/testing
+
+## 1.1.12
+
+### Patch Changes
+
+- Updated dependencies [6163ee3]
+  - @partylayer/core@0.16.0
+  - @partylayer/provider@0.6.2
+  - @partylayer/session@1.1.11
+
+## 1.1.11
+
+### Patch Changes
+
+- Give the offline client explicit mock signature and ledger-offset evidence.
+  Keep timeout outcomes unknown instead of labeling them transaction rejection:
+  `transactionTimeout` now uses -32603 with timeout data, replacing its incorrect
+  -32003 code. Update offline examples for session validation before submission.
+
+- Updated dependencies [817d357]
+- Updated dependencies [2e07185]
+- Updated dependencies [882752f]
+- Updated dependencies [0ebd598]
+- Updated dependencies [8cb0f09]
+- Updated dependencies [8e08da9]
+  - @partylayer/core@0.15.0
+  - @partylayer/provider@0.6.1
+  - @partylayer/session@1.1.9
+
+## 1.1.10
+
+### Patch Changes
+
+- Updated dependencies [9e8ca31]
+- Updated dependencies [fbda51f]
+  - @partylayer/core@0.14.0
+  - @partylayer/provider@0.6.0
+  - @partylayer/session@1.1.8
+
+## 1.1.9
+
+### Patch Changes
+
+- Updated dependencies [f7ee857]
+- Updated dependencies [4309023]
+- Updated dependencies [4309023]
+  - @partylayer/provider@0.5.2
+  - @partylayer/core@0.13.0
+  - @partylayer/session@1.1.7
+
+## 1.1.8
+
+### Patch Changes
+
+- Mark the package as free of import-time side effects (`"sideEffects": false`) so bundlers can tree-shake unused exports. The flag was in the repository but had never been published, so no installed version carried it and the measured tree-shaking never reached consumers; this is the change that delivers it. Verified per package that nothing runs at import beyond pure construction: no side-effect or asset imports, no writes to `window`, `globalThis`, or `global`, no prototype patching, and no import-time storage, DOM, or network access.
+- Updated dependencies
+  - @partylayer/core@0.12.1
+  - @partylayer/provider@0.5.1
+  - @partylayer/session@1.1.6
+
+## 1.1.7
+
+### Patch Changes
+
+- Updated dependencies [d7317a5]
+- Updated dependencies [482ec3e]
+- Updated dependencies [d132cf3]
+  - @partylayer/core@0.12.0
+  - @partylayer/provider@0.5.0
+  - @partylayer/session@1.1.5
+
+## 1.1.6
+
+### Patch Changes
+
+- Updated dependencies
+- Updated dependencies
+  - @partylayer/core@0.11.0
+  - @partylayer/provider@0.4.0
+  - @partylayer/session@1.1.4
+
+## 1.1.5
+
+### Patch Changes
+
+- Updated dependencies [4850140]
+  - @partylayer/core@0.10.0
+  - @partylayer/provider@0.3.2
+  - @partylayer/session@1.1.2
+
+## 1.1.4
+
+### Patch Changes
+
+- Updated dependencies [a3f2ea4]
+  - @partylayer/provider@0.3.0
+
+## 1.1.3
+
+### Patch Changes
+
+- Updated dependencies [5546a90]
+  - @partylayer/core@0.9.0
+  - @partylayer/provider@0.2.6
+  - @partylayer/session@1.1.1
+
+## 1.1.2
+
+### Patch Changes
+
+- Updated dependencies [bef0ac6]
+  - @partylayer/core@0.8.0
+  - @partylayer/provider@0.2.5
+  - @partylayer/session@1.0.4
+
+## 1.1.1
+
+### Patch Changes
+
+- Updated dependencies [3285ed8]
+  - @partylayer/core@0.7.0
+  - @partylayer/provider@0.2.4
+  - @partylayer/session@1.0.3
+
+## 1.1.0
+
+### Minor Changes
+
+- adaff8e: Add `sessionDataDbName(origin)`: the origin-bound IndexedDB name for the encrypted session DATA (ciphertext envelope) store, counterpart to `sessionKeyDbName`. Lets an E2E assert BOTH encrypted stores (the AES key and the encrypted snapshot) materialized after a connect.
+
+### Patch Changes
+
+- Updated dependencies [6efe375]
+- Updated dependencies [adaff8e]
+  - @partylayer/core@0.6.0
+  - @partylayer/provider@0.2.3
+  - @partylayer/session@1.0.2
+
+## 1.0.0
+
+### Major Changes
+
+- dd805a0: 1.0: offline test foundation, published.
+
+  `@partylayer/testing` becomes a public, stable package providing everything
+  needed to test PartyLayer integrations with no DevNet or live wallet:
+
+  - **Mock CIP-0103 provider** with configurable per-method failure scenarios
+    (connect rejection, insufficient traffic, synchronizer error, transaction
+    timeout), conformant by construction.
+  - **Transaction lifecycle simulation** with controllable phase transitions
+    (`isPreparing → isSubmitting → isConfirming → isFinalized`, plus failure).
+  - **Session-lifecycle harness** (`createSessionHarness`) driving the real
+    `@partylayer/session` store: forced expiry (via the store's real timer),
+    party-switch, transient-disconnect/reconnect, and multi-tab disconnect
+    propagation. Never synthetic event shortcuts.
+  - **Offline composition** (`createOfflineHarness`) wiring a mock wallet to a real
+    session store.
+  - **TanStack Query utilities** at the `@partylayer/testing/query` subpath
+    (cache assertions, invalidation, optimistic rollback, query-inclusive harness);
+    `@tanstack/query-core` is an optional peer so the main entry stays
+    dependency-free.
+  - **Browser/e2e primitives** (framework-agnostic script strings) for a real-browser
+    Playwright persistence smoke.
+
+## 0.1.2
+
+### Patch Changes
+
+- Updated dependencies [9642aee]
+- Updated dependencies [2c4c10c]
+- Updated dependencies [9642aee]
+  - @partylayer/core@0.5.0
+  - @partylayer/provider@0.2.1
+
+## 0.1.1
+
+### Patch Changes
+
+- Updated dependencies [42c862d]
+- Updated dependencies [c18a275]
+- Updated dependencies [53b1714]
+  - @partylayer/provider@0.2.0
+  - @partylayer/core@0.4.0

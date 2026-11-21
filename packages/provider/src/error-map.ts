@@ -10,9 +10,16 @@ import { ProviderRpcError, RPC_ERRORS, JSON_RPC_ERRORS } from './errors';
 
 // ─── PartyLayer ErrorCode → CIP-0103 numeric code ──────────────────────────
 
-const ERROR_CODE_TO_RPC: Record<ErrorCode, number> = {
+// SYNCHRONIZER_ERROR is intentionally absent from this map. CIP-0103 defines no
+// dedicated synchronizer code, so per the kit level, no wire mapping policy it is not
+// mapped here and falls through to the INTERNAL_ERROR default in toProviderRpcError
+// below. The map is Partial for that reason alone; no existing entry changes.
+const ERROR_CODE_TO_RPC: Partial<Record<ErrorCode, number>> = {
   USER_REJECTED: RPC_ERRORS.USER_REJECTED,
   WALLET_NOT_FOUND: JSON_RPC_ERRORS.RESOURCE_NOT_FOUND,
+  // Client-side config gap (the walletId refers to an unwired discovery adapter),
+  // not a missing resource → INVALID_PARAMS, distinct from WALLET_NOT_FOUND.
+  ADAPTER_NOT_REGISTERED: JSON_RPC_ERRORS.INVALID_PARAMS,
   WALLET_NOT_INSTALLED: JSON_RPC_ERRORS.RESOURCE_UNAVAILABLE,
   ORIGIN_NOT_ALLOWED: RPC_ERRORS.UNAUTHORIZED,
   SESSION_EXPIRED: RPC_ERRORS.DISCONNECTED,
@@ -22,7 +29,12 @@ const ERROR_CODE_TO_RPC: Record<ErrorCode, number> = {
   REGISTRY_VERIFICATION_FAILED: JSON_RPC_ERRORS.INTERNAL_ERROR,
   REGISTRY_SCHEMA_INVALID: JSON_RPC_ERRORS.INTERNAL_ERROR,
   INTERNAL_ERROR: JSON_RPC_ERRORS.INTERNAL_ERROR,
+  NETWORK_MISMATCH: JSON_RPC_ERRORS.INVALID_INPUT,
   TIMEOUT: JSON_RPC_ERRORS.INVALID_INPUT,
+  // Traffic allowance exhausted maps to the spec's limit-exceeded code. CIP-0103's
+  // own table lists -32005 as the limit exceeded semantic; it was defined but unused
+  // until now, so no proprietary code is introduced.
+  INSUFFICIENT_TRAFFIC: JSON_RPC_ERRORS.RATE_LIMIT_EXCEEDED,
 };
 
 // ─── CIP-0103 numeric code → PartyLayer ErrorCode (best-effort reverse) ────
@@ -39,6 +51,7 @@ const RPC_TO_ERROR_CODE: Partial<Record<number, ErrorCode>> = {
   [JSON_RPC_ERRORS.RESOURCE_UNAVAILABLE]: 'WALLET_NOT_INSTALLED',
   [JSON_RPC_ERRORS.TRANSACTION_REJECTED]: 'USER_REJECTED',
   [JSON_RPC_ERRORS.INVALID_INPUT]: 'TIMEOUT',
+  [JSON_RPC_ERRORS.RATE_LIMIT_EXCEEDED]: 'INSUFFICIENT_TRAFFIC',
 };
 
 /**

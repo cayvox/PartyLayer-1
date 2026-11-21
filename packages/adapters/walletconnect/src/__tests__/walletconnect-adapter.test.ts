@@ -1,0 +1,654 @@
+/**
+ * WalletConnect adapter tests — the official @canton-network/dapp-sdk adapter is
+ * mocked (no real projectId / network needed). Functional tests inject the
+ * official adapter via `createOfficialAdapter`; the lazy-import proof uses the
+ * default dynamic-import path with a mocked dapp-sdk module to assert deferral.
+ */
+
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import {
+  CapabilityNotSupportedError,
+  toPartyId,
+  toSessionId,
+  toWalletId,
+  type AdapterContext,
+  type CapabilityKey,
+  type Session,
+} from '@partylayer/core';
+
+// Tracks whether the dapp-sdk barrel was loaded (for the lazy-import proof).
+const h = vi.hoisted(() => ({ dappSdkLoaded: false }));
+vi.mock('@canton-network/dapp-sdk', () => {
+  h.dappSdkLoaded = true;
+  return {
+    WalletConnectAdapter: {
+      create: (cfg: { onUri?: (u: string) => void }) => ({
+        request: async (args: { method: string }) => {
+          if (args.method === 'connect') {
+            cfg.onUri?.('wc:default@2');
+            return { isConnected: true };
+          }
+          if (args.method === 'getPrimaryAccount') return { partyId: 'party::default' };
+          return {};
+        },
+        on: () => undefined,
+        removeListener: () => undefined,
+        teardown: () => undefined,
+        restore: async () => null,
+        detect: async () => true,
+      }),
+    },
+  };
+});
+
+import { WalletConnectAdapter } from '../walletconnect-adapter';
+
+// ── Harness ──────────────────────────────────────────────────────────────────
+
+function createMockContext(): AdapterContext {
+  return {
+    appName: 'Test dApp',
+    origin: 'https://test.example.com',
+    network: 'mainnet',
+    logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+    registry: { getWallet: vi.fn() },
+    crypto: { encrypt: vi.fn(), decrypt: vi.fn(), generateKey: vi.fn() },
+    storage: { get: vi.fn(), set: vi.fn(), remove: vi.fn(), clear: vi.fn() },
+    timeout: (ms: number) =>
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Timeout')), ms)),
+  };
+}
+
+function createMockSession(): Session {
+  return {
+    sessionId: toSessionId('sess-wc'),
+    walletId: toWalletId('walletconnect'),
+    partyId: toPartyId('party::wc-1'),
+    network: 'mainnet',
+    createdAt: Date.now(),
+    origin: 'https://test.example.com',
+    capabilitiesSnapshot: ['connect'] as CapabilityKey[],
+  };
+}
+
+interface MockOfficialOptions {
+  restoreReturns?: boolean;
+}
+
+/** A mock of the official WalletConnectAdapter with event buffering. */
+function makeMockOfficial(cfg: { onUri?: (u: string) => void }, opts: MockOfficialOptions = {}) {
+  const listeners = new Map<string, Set<(...args: unknown[]) => void>>();
+  const buffer: Array<{ event: string; args: unknown[] }> = [];
+  let connected = false;
+
+  function dispatch(event: string, ...args: unknown[]): void {
+    const set = listeners.get(event);
+    if (set && set.size > 0) set.forEach((l) => l(...args));
+    else buffer.push({ event, args }); // buffered until a listener attaches
+  }
+
+  const teardown = vi.fn();
+
+  const wc = {
+    __cfg: cfg,
+    teardown,
+    request: vi.fn(async (args: { method: string; params?: unknown }) => {
+      switch (args.method) {
+        case 'connect':
+          cfg.onUri?.('wc:abc123@2?relay-protocol=irn&symKey=deadbeef');
+          connected = true;
+          // a tx event arrives before any listener attaches → must be buffered
+          dispatch('txChanged', { status: 'executed', commandId: 'cmd-1' });
+          return { isConnected: true };
+        case 'getPrimaryAccount':
+          return {
+            partyId: 'party::wc-1',
+            publicKey: 'wc-pubkey',
+            namespace: 'wc-ns',
+            networkId: 'canton:da-mainnet',
+            signingProviderId: 'wc-signer',
+            hint: 'wc-hint',
+          };
+        case 'status':
+          return {
+            network: { networkId: 'canton:da-mainnet', ledgerApi: { baseUrl: 'https://wc.example' } },
+            session: { userId: 'wc-user', expiresAt: 9_999_999_999_999 },
+          };
+        case 'prepareExecuteAndWait':
+          return { tx: { commandId: 'cmd-2', payload: { updateId: 'update-2', completionOffset: 42 } } };
+        case 'signMessage':
+          return { signature: 'wc-signature-deadbeef' };
+        case 'ledgerApi':
+          return { offset: '42', from: 'canton_ledgerApi' };
+        case 'disconnect':
+          connected = false;
+          return null;
+        default:
+          return {};
+      }
+    }),
+    on: vi.fn((event: string, listener: (...args: unknown[]) => void) => {
+      let set = listeners.get(event);
+      if (!set) {
+        set = new Set();
+        listeners.set(event, set);
+      }
+      set.add(listener);
+      // flush buffered events for this event to the late listener
+      for (const b of buffer.filter((x) => x.event === event)) listener(...b.args);
+      return wc;
+    }),
+    removeListener: vi.fn((event: string, listener: (...args: unknown[]) => void) => {
+      listeners.get(event)?.delete(listener);
+      return wc;
+    }),
+    restore: vi.fn(async () => (opts.restoreReturns ? wc : null)),
+    detect: vi.fn(async () => true),
+    /** Test helper: emit an event live (not buffered). */
+    __emit(event: string, ...args: unknown[]) {
+      listeners.get(event)?.forEach((l) => l(...args));
+    },
+  };
+  return wc;
+}
+
+afterEach(() => {
+  vi.clearAllMocks();
+});
+
+describe('WalletConnectAdapter — identity & detection', () => {
+  it('requires a projectId', () => {
+    expect(() => new WalletConnectAdapter({ projectId: '' })).toThrow(/projectId/);
+  });
+
+  it('has walletId "walletconnect" and name "WalletConnect"', () => {
+    const a = new WalletConnectAdapter({ projectId: 'p' });
+    expect(a.walletId).toBe(toWalletId('walletconnect'));
+    expect(a.name).toBe('WalletConnect');
+  });
+
+  it('detectInstalled() reports no-local-install when a projectId is configured (no dapp-sdk import)', async () => {
+    const before = h.dappSdkLoaded;
+    const a = new WalletConnectAdapter({ projectId: 'p' });
+    const detect = await a.detectInstalled();
+    // WAS `installed: true`, which answered "the app supplied a projectId" to a
+    // question asking whether a wallet is installed on this machine. It is a
+    // relay: there is nothing local, configured or not.
+    expect(detect.availability?.kind).toBe('no-local-install');
+    expect(detect.installed).toBe(false);
+    // detection must not trigger the dapp-sdk dynamic import
+    expect(h.dappSdkLoaded).toBe(before);
+  });
+
+
+  it('declares WC capabilities incl. remoteSigner; not signTransaction', () => {
+    const caps = new WalletConnectAdapter({ projectId: 'p' }).getCapabilities();
+    expect(caps).toEqual(
+      expect.arrayContaining(['connect', 'submitTransaction', 'ledgerApi', 'events', 'remoteSigner']),
+    );
+    expect(caps).not.toContain('signTransaction');
+  });
+
+  it('getInfo() exposes a picker-friendly id/name/icon', () => {
+    const info = new WalletConnectAdapter({ projectId: 'p' }).getInfo();
+    expect(info).toMatchObject({ id: 'walletconnect', name: 'WalletConnect' });
+    expect(info.icon).toMatch(/^data:image\/svg\+xml/);
+  });
+});
+
+describe('WalletConnectAdapter — connect', () => {
+  it('establishes a session, fires onUri (QR hook), and returns AdapterConnectResult', async () => {
+    const onUri = vi.fn();
+    const adapter = new WalletConnectAdapter(
+      { projectId: 'p', onUri },
+      { createOfficialAdapter: (cfg) => makeMockOfficial(cfg) },
+    );
+    const ctx = createMockContext();
+
+    const result = await adapter.connect(ctx);
+
+    expect(onUri).toHaveBeenCalledWith(expect.stringMatching(/^wc:/)); // pairing URI → modal QR
+    expect(result.partyId).toBe(toPartyId('party::wc-1'));
+    expect(result.session.walletId).toBe(toWalletId('walletconnect'));
+    expect(result.session.metadata?.transport).toBe('walletconnect');
+    expect(result.session.metadata?.publicKey).toBe('wc-pubkey');
+    expect(result.session.metadata?.userId).toBe('wc-user');
+    expect(result.session.expiresAt).toBe(9_999_999_999_999);
+    expect(result.capabilities).toEqual(adapter.getCapabilities());
+  });
+
+  it('forwards onUri + metadata into the official adapter config', async () => {
+    let captured: Record<string, unknown> | undefined;
+    const adapter = new WalletConnectAdapter(
+      {
+        projectId: 'proj-1',
+        metadata: { name: 'My dApp', description: 'd', url: 'https://x', icons: ['https://x/i.png'] },
+        onUri: vi.fn(),
+      },
+      {
+        createOfficialAdapter: (cfg) => {
+          captured = cfg;
+          return makeMockOfficial(cfg);
+        },
+      },
+    );
+    await adapter.connect(createMockContext());
+    expect(captured?.projectId).toBe('proj-1');
+    expect(captured?.metadata).toMatchObject({ name: 'My dApp' });
+    expect(typeof captured?.onUri).toBe('function');
+    // no explicit config.chainId → derived from ctx.network ('mainnet')
+    expect(captured?.chainId).toBe('canton:da-mainnet');
+  });
+
+  it('delivers the pairing URI to connect opts.onDisplayUri (modal QR plumbing)', async () => {
+    const seen: string[] = [];
+    const adapter = new WalletConnectAdapter(
+      { projectId: 'p' },
+      { createOfficialAdapter: (cfg) => makeMockOfficial(cfg) },
+    );
+    await adapter.connect(createMockContext(), { onDisplayUri: (u) => seen.push(u) });
+    expect(seen.some((u) => u.startsWith('wc:'))).toBe(true);
+  });
+
+  it('fans the URI to BOTH the integrator config.onUri AND connect opts.onDisplayUri', async () => {
+    const configOnUri = vi.fn();
+    const onDisplayUri = vi.fn();
+    const adapter = new WalletConnectAdapter(
+      { projectId: 'p', onUri: configOnUri },
+      { createOfficialAdapter: (cfg) => makeMockOfficial(cfg) },
+    );
+    await adapter.connect(createMockContext(), { onDisplayUri });
+    expect(configOnUri).toHaveBeenCalledWith(expect.stringMatching(/^wc:/));
+    expect(onDisplayUri).toHaveBeenCalledWith(expect.stringMatching(/^wc:/));
+  });
+
+  it('suppresses the blank wallet-popup during connect and restores window.open after', async () => {
+    const realOpen = vi.fn((_url?: unknown, _target?: unknown) => ({ closed: false }));
+    vi.stubGlobal('window', { open: realOpen });
+    let popupDuringConnect: unknown = 'unset';
+    const adapter = new WalletConnectAdapter(
+      { projectId: 'p' },
+      {
+        createOfficialAdapter: (cfg) => {
+          const base = makeMockOfficial(cfg);
+          return {
+            ...base,
+            request: async (args: { method: string; params?: unknown }) => {
+              if (args.method === 'connect') {
+                cfg.onUri?.('wc:popup-test@2');
+                // mirror the official adapter's showUriInPopup window.open call
+                popupDuringConnect = (window as unknown as { open: typeof window.open }).open(
+                  '',
+                  'wallet-popup',
+                );
+                return { isConnected: true };
+              }
+              return base.request(args);
+            },
+          };
+        },
+      },
+    );
+    await adapter.connect(createMockContext());
+    expect(popupDuringConnect).toBeNull(); // wallet-popup suppressed during connect
+    expect((window as unknown as { open: unknown }).open).toBe(realOpen); // restored after
+    // the real window.open was never invoked for the blank wallet-popup
+    expect(realOpen).not.toHaveBeenCalledWith('', 'wallet-popup');
+    vi.unstubAllGlobals();
+  });
+});
+
+describe('WalletConnectAdapter — events (delegation + buffering)', () => {
+  it('delivers a buffered txChanged to a late-attached txStatus listener (translated)', async () => {
+    const official = makeMockOfficial({});
+    const adapter = new WalletConnectAdapter(
+      { projectId: 'p' },
+      { createOfficialAdapter: () => official },
+    );
+    await adapter.connect(createMockContext()); // buffers a txChanged('executed') before any listener
+
+    const handler = vi.fn();
+    const unsub = adapter.on('txStatus', handler); // attaches late → buffer flushes
+
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(handler.mock.calls[0][0]).toMatchObject({ status: 'committed', commandId: 'cmd-1' });
+
+    // unsubscribe → official.removeListener; subsequent live events not delivered
+    unsub();
+    expect(official.removeListener).toHaveBeenCalledWith('txChanged', expect.any(Function));
+    official.__emit('txChanged', { status: 'pending', commandId: 'cmd-9' });
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it('on() before connect is a safe no-op', () => {
+    const adapter = new WalletConnectAdapter({ projectId: 'p' });
+    expect(() => adapter.on('txStatus', vi.fn())()).not.toThrow();
+  });
+});
+
+describe('WalletConnectAdapter — disconnect / restore / submit', () => {
+  it.each([false, { isConnected: false }])('rejects a declined handshake even if a cached account exists: %j', async result => {
+    const official = makeMockOfficial({});
+    official.request.mockResolvedValueOnce(result as never);
+    const adapter = new WalletConnectAdapter({ projectId: 'p' }, { createOfficialAdapter: () => official });
+    await expect(adapter.connect(createMockContext())).rejects.toThrow(/did not establish/);
+    expect(official.request).not.toHaveBeenCalledWith({ method: 'getPrimaryAccount' });
+  });
+
+  it('rejects an empty primary account at connection time', async () => {
+    const official = makeMockOfficial({});
+    official.request.mockResolvedValueOnce({ isConnected: true } as never).mockResolvedValueOnce({ partyId: '' } as never);
+    const adapter = new WalletConnectAdapter({ projectId: 'p' }, { createOfficialAdapter: () => official });
+    await expect(adapter.connect(createMockContext())).rejects.toThrow(/primary party/);
+  });
+
+  it.each([
+    { account: { partyId: 'other::party', networkId: 'canton:da-mainnet' }, status: {} },
+    { account: { partyId: 'party::wc-1', networkId: 'canton:da-devnet' }, status: {} },
+    { account: { partyId: 'party::wc-1' }, status: { network: { networkId: 'canton:da-devnet' } } },
+    { account: { partyId: '' }, status: {} },
+    { account: { partyId: 'party::wc-1' }, status: { isConnected: false } },
+    { account: { partyId: 'party::wc-1' }, status: { session: { expiresAt: 1 } } },
+  ])('does not restore a stale identity/network or inactive session: %j', async ({ account, status }) => {
+    const official = makeMockOfficial({}, { restoreReturns: true });
+    official.request.mockImplementation(async ({ method }) => (method === 'getPrimaryAccount' ? account : status) as never);
+    const adapter = new WalletConnectAdapter({ projectId: 'p' }, { createOfficialAdapter: () => official });
+    expect(await adapter.restore(createMockContext(), createMockSession())).toBeNull();
+  });
+
+  it.each([
+    { signature: '' }, { signature: '   ' },
+    { signature: 'opaque', partyId: 'other::party' },
+    { signature: 'opaque', message: 'different bytes' },
+  ])('rejects invalid or explicitly mismatched signature responses: %j', async result => {
+    const official = makeMockOfficial({});
+    official.request.mockResolvedValueOnce(result as never);
+    const adapter = new WalletConnectAdapter({ projectId: 'p' }, { createOfficialAdapter: () => official });
+    await expect(adapter.signMessage(createMockContext(), createMockSession(), { message: 'Hello Canton' })).rejects.toThrow(/signature|unexpected/);
+  });
+
+  it('disconnect() requests disconnect then teardown()s', async () => {
+    const official = makeMockOfficial({});
+    const adapter = new WalletConnectAdapter(
+      { projectId: 'p' },
+      { createOfficialAdapter: () => official },
+    );
+    await adapter.connect(createMockContext());
+    await adapter.disconnect(createMockContext(), createMockSession());
+    expect(official.request).toHaveBeenCalledWith({ method: 'disconnect' });
+    expect(official.teardown).toHaveBeenCalledTimes(1);
+  });
+
+  it('restore() returns a Session when the official adapter restores', async () => {
+    const official = makeMockOfficial({}, { restoreReturns: true });
+    const adapter = new WalletConnectAdapter(
+      { projectId: 'p' },
+      { createOfficialAdapter: () => official },
+    );
+    const restored = await adapter.restore(createMockContext(), createMockSession());
+    expect(restored).not.toBeNull();
+    expect(restored!.walletId).toBe(toWalletId('walletconnect'));
+  });
+
+  it('restore() returns null when the official adapter has no session', async () => {
+    const official = makeMockOfficial({}, { restoreReturns: false });
+    const adapter = new WalletConnectAdapter(
+      { projectId: 'p' },
+      { createOfficialAdapter: () => official },
+    );
+    expect(await adapter.restore(createMockContext(), createMockSession())).toBeNull();
+  });
+
+  it('submitTransaction() goes through prepareExecuteAndWait', async () => {
+    const official = makeMockOfficial({});
+    const adapter = new WalletConnectAdapter(
+      { projectId: 'p' },
+      { createOfficialAdapter: () => official },
+    );
+    const receipt = await adapter.submitTransaction(createMockContext(), createMockSession(), {
+      signedTx: { commands: [] },
+    });
+    expect(String(receipt.transactionHash)).toBe('update-2');
+    expect(receipt.completionOffset).toBe(42);
+  });
+
+  it('signMessage() issues canton_signMessage and maps the result to SignedMessage', async () => {
+    const official = makeMockOfficial({});
+    const adapter = new WalletConnectAdapter(
+      { projectId: 'p' },
+      { createOfficialAdapter: () => official },
+    );
+    const session = createMockSession();
+    const signed = await adapter.signMessage(createMockContext(), session, {
+      message: 'Hello Canton',
+      nonce: 'n1',
+    });
+    // request goes through the official adapter as `signMessage` (it prefixes canton_)
+    expect(official.request).toHaveBeenCalledWith({
+      method: 'signMessage',
+      params: { message: 'Hello Canton' },
+    });
+    expect(String(signed.signature)).toBe('wc-signature-deadbeef');
+    expect(signed.partyId).toBe(session.partyId);
+    expect(signed.message).toBe('Hello Canton');
+    expect(signed.nonce).toBe('n1');
+  });
+
+  it('ledgerApi() proxies through canton_ledgerApi and returns a string response', async () => {
+    const official = makeMockOfficial({});
+    const adapter = new WalletConnectAdapter(
+      { projectId: 'p' },
+      { createOfficialAdapter: () => official },
+    );
+    const res = await adapter.ledgerApi(createMockContext(), createMockSession(), {
+      requestMethod: 'GET',
+      resource: '/v2/state/ledger-end',
+    });
+    // Canonical CIP-0103: the verb is lower-cased on the wire.
+    expect(official.request).toHaveBeenCalledWith({
+      method: 'ledgerApi',
+      params: { requestMethod: 'get', resource: '/v2/state/ledger-end' },
+    });
+    expect(typeof res.response).toBe('string');
+    expect(res.response).toContain('canton_ledgerApi');
+  });
+
+  it('ledgerApi() normalizes to CIP-0103: lower-case verb + OBJECT body', async () => {
+    const official = makeMockOfficial({});
+    const adapter = new WalletConnectAdapter(
+      { projectId: 'p' },
+      { createOfficialAdapter: () => official },
+    );
+    // A string body from the SDK boundary is parsed to an object on the wire.
+    await adapter.ledgerApi(createMockContext(), createMockSession(), {
+      requestMethod: 'POST',
+      resource: '/v2/state/active-contracts',
+      body: '{"filter":{"x":1}}',
+    });
+    expect(official.request).toHaveBeenCalledWith({
+      method: 'ledgerApi',
+      params: {
+        requestMethod: 'post',
+        resource: '/v2/state/active-contracts',
+        body: { filter: { x: 1 } },
+      },
+    });
+  });
+
+  it('signTransaction() throws CapabilityNotSupportedError', async () => {
+    const adapter = new WalletConnectAdapter({ projectId: 'p' });
+    await expect(
+      adapter.signTransaction(createMockContext(), createMockSession(), { tx: {} }),
+    ).rejects.toBeInstanceOf(CapabilityNotSupportedError);
+  });
+
+  it('capability/method integrity: every method-capability has a working method', () => {
+    const adapter = new WalletConnectAdapter({ projectId: 'p' });
+    const caps = adapter.getCapabilities();
+    // Capabilities that MUST have a corresponding adapter method (the rest —
+    // remoteSigner/deeplink/events — are transport flags or handled via on()).
+    const methodFor: Partial<Record<string, keyof WalletConnectAdapter>> = {
+      connect: 'connect',
+      disconnect: 'disconnect',
+      restore: 'restore',
+      signMessage: 'signMessage',
+      submitTransaction: 'submitTransaction',
+      ledgerApi: 'ledgerApi',
+      events: 'on',
+    };
+    for (const cap of caps) {
+      const method = methodFor[cap];
+      if (!method) continue; // transport flag (remoteSigner/deeplink)
+      expect(
+        typeof (adapter as unknown as Record<string, unknown>)[method as string],
+        `capability "${cap}" must have method "${String(method)}"`,
+      ).toBe('function');
+    }
+    // signMessage + ledgerApi must be present (regression: were declared but unimplemented)
+    expect(typeof adapter.signMessage).toBe('function');
+    expect(typeof adapter.ledgerApi).toBe('function');
+  });
+});
+
+describe('WalletConnectAdapter — lazy import proof', () => {
+  it('importing the entry + detectInstalled does NOT load dapp-sdk; connect() (default path) does', async () => {
+    h.dappSdkLoaded = false;
+
+    // Importing the package entry must not pull dapp-sdk.
+    const mod = await import('../index');
+    expect(h.dappSdkLoaded).toBe(false);
+
+    // Constructing + detecting must not pull dapp-sdk either.
+    const adapter = new mod.WalletConnectAdapter({ projectId: 'p' });
+    await adapter.detectInstalled();
+    expect(h.dappSdkLoaded).toBe(false);
+
+    // Only the default connect() path triggers the dynamic import.
+    await adapter.connect(createMockContext());
+    expect(h.dappSdkLoaded).toBe(true);
+  });
+});
+
+describe('WalletConnectAdapter — CAIP-2 chain derivation (A1)', () => {
+  function withNetwork(network: string): AdapterContext {
+    return { ...createMockContext(), network };
+  }
+
+  async function capturedChainFor(network: string, configChainId?: string): Promise<unknown> {
+    let captured: Record<string, unknown> | undefined;
+    const adapter = new WalletConnectAdapter(
+      { projectId: 'p', ...(configChainId ? { chainId: configChainId } : {}) },
+      {
+        createOfficialAdapter: (cfg) => {
+          captured = cfg;
+          return makeMockOfficial(cfg);
+        },
+      },
+    );
+    await adapter.connect(withNetwork(network));
+    return captured?.chainId;
+  }
+
+  it("derives 'canton:da-devnet' from ctx.network='devnet'", async () => {
+    expect(await capturedChainFor('devnet')).toBe('canton:da-devnet');
+  });
+
+  it("derives 'canton:da-mainnet' from ctx.network='mainnet'", async () => {
+    expect(await capturedChainFor('mainnet')).toBe('canton:da-mainnet');
+  });
+
+  it("derives 'canton:da-testnet' from ctx.network='testnet'", async () => {
+    expect(await capturedChainFor('testnet')).toBe('canton:da-testnet');
+  });
+
+  it('explicit config.chainId overrides the derived network chain', async () => {
+    expect(await capturedChainFor('mainnet', 'canton:da-devnet')).toBe('canton:da-devnet');
+  });
+
+  it('rebuilds the official adapter when the network (chain) changes', async () => {
+    const chains: unknown[] = [];
+    let calls = 0;
+    const adapter = new WalletConnectAdapter(
+      { projectId: 'p' },
+      {
+        createOfficialAdapter: (cfg) => {
+          calls += 1;
+          chains.push(cfg.chainId);
+          return makeMockOfficial(cfg);
+        },
+      },
+    );
+    await adapter.connect(withNetwork('devnet'));
+    await adapter.connect(withNetwork('mainnet'));
+    expect(calls).toBe(2);
+    expect(chains).toEqual(['canton:da-devnet', 'canton:da-mainnet']);
+  });
+
+  it('reports the wallet effective network in session.network (not ctx.network)', async () => {
+    // The mock status/account report canton:da-mainnet; the dApp requested devnet.
+    const adapter = new WalletConnectAdapter(
+      { projectId: 'p' },
+      { createOfficialAdapter: (cfg) => makeMockOfficial(cfg) },
+    );
+    const result = await adapter.connect({ ...createMockContext(), network: 'devnet' });
+    expect(result.session.network).toBe('canton:da-mainnet'); // wallet-reported wins
+  });
+
+  it('reuses the official adapter when the network is unchanged', async () => {
+    let calls = 0;
+    const adapter = new WalletConnectAdapter(
+      { projectId: 'p' },
+      {
+        createOfficialAdapter: (cfg) => {
+          calls += 1;
+          return makeMockOfficial(cfg);
+        },
+      },
+    );
+    await adapter.connect(withNetwork('devnet'));
+    await adapter.connect(withNetwork('devnet'));
+    expect(calls).toBe(1);
+  });
+});
+
+// ── no invented values ───────────────────────────────────────────────────────
+
+describe('WalletConnectAdapter — submitTransaction invents nothing', () => {
+  it('returns the real updateId and commandId', async () => {
+    const adapter = new WalletConnectAdapter(
+      { projectId: 'p' },
+      { createOfficialAdapter: (cfg) => makeMockOfficial(cfg) },
+    );
+    const ctx = createMockContext();
+    await adapter.connect(ctx);
+
+    const receipt = await adapter.submitTransaction(ctx, {} as never, { signedTx: {} });
+
+    expect(receipt.updateId).toBe('update-2');
+    expect(String(receipt.transactionHash)).toBe('update-2');
+    expect(receipt.commandId).toBe('cmd-2');
+  });
+
+  it('fails when the response carries no updateId, rather than reporting "pending"', async () => {
+    // Was `updateId ?? commandId ?? 'pending'` — the literal string "pending"
+    // returned as a transactionHash. Matches the Send adapter, which reaches the
+    // same response and already throws.
+    const official = makeMockOfficial({});
+    official.request.mockImplementation(async (args: { method: string }) => {
+      if (args.method === 'connect') return { isConnected: true };
+      if (args.method === 'getPrimaryAccount') return { partyId: 'party::wc-1' };
+      if (args.method === 'prepareExecuteAndWait') return { tx: { commandId: 'cmd-3' } };
+      return {};
+    });
+    const adapter = new WalletConnectAdapter(
+      { projectId: 'p' },
+      { createOfficialAdapter: () => official },
+    );
+    const ctx = createMockContext();
+    await adapter.connect(ctx);
+
+    await expect(
+      adapter.submitTransaction(ctx, {} as never, { signedTx: {} }),
+    ).rejects.toThrow(/no updateId/);
+  });
+});

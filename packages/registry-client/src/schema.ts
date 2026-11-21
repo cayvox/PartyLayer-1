@@ -13,7 +13,15 @@
  * - Wallet Integration Guide: https://docs.digitalasset.com/integrate/devnet/index.html
  */
 
-import type { WalletInfo, NetworkId, CapabilityKey } from '@partylayer/core';
+import type {
+  AdapterTransport,
+  CapabilityKey,
+  Cip0103Support,
+  NetworkHosts,
+  NetworkId,
+  ProviderDetection,
+  WalletInfo,
+} from '@partylayer/core';
 import { toWalletId } from '@partylayer/core';
 
 /**
@@ -47,25 +55,120 @@ export interface RegistryWalletEntry {
     signMessage: boolean;
     signTransaction: boolean;
     submitTransaction: boolean;
+    /** Can report transaction status (e.g. await commit). NOT the same as
+     *  emitting provider events — see `events`. */
     transactionStatus: boolean;
     switchNetwork: boolean;
     multiParty: boolean;
+    mobileConnect?: boolean;
+    remoteSigner?: boolean;
+    /**
+     * Emits CIP-0103 provider events (statusChanged/accountsChanged/...).
+     * Optional + additive; defaults to false. Declared ONLY when the wallet
+     * actually emits — popup/remote wallets (e.g. Walley) expose the on/emit
+     * surface but never fire, so they MUST omit/false this. (Decoupled from
+     * `transactionStatus`, which previously — and incorrectly — implied events.)
+     */
+    events?: boolean;
+    /**
+     * Typed transfer intent: the WALLET builds, displays, approves, signs and
+     * executes a transfer and returns a real update id. Declared only by a
+     * wallet that does BOTH halves.
+     *
+     * These four were `CapabilityKey` values the registry had no field for, so
+     * `walletInfo.capabilities` could NEVER contain them, and
+     * `listWallets({ requiredCapabilities: ['transfer'] })` returned zero
+     * wallets for every wallet — while the adapters implemented `requestTransfer`
+     * and reported the capability. Two gates, contradictory sources.
+     */
+    transfer?: boolean;
+    /** Proxies CIP-0103 `ledgerApi` calls. */
+    ledgerApi?: boolean;
+    /** Connecting opens a window the caller must reach from a user gesture. */
+    popup?: boolean;
+    /** Can revive a persisted session without a fresh user approval. */
+    restore?: boolean;
   };
   /** Adapter configuration */
   adapter: {
     /** Adapter type/name */
     type: string;
-    /** Adapter-specific configuration */
+    /**
+     * How the SDK obtains this wallet's provider. Optional + additive — when
+     * omitted the SDK uses today's behavior (injected `window.canton` scan /
+     * announce). `'discovery-adapter'` routes the entry through the generic
+     * official-adapter bridge: the SDK matches an app-supplied
+     * `OfficialProviderAdapter` whose `providerId` equals `config.providerId`.
+     * No wallet-specific adapter package is involved.
+     */
+    transport?: AdapterTransport;
+    /**
+     * Adapter-specific configuration. For `transport: 'discovery-adapter'`,
+     * `config.providerId` (string) keys the app-supplied official adapter.
+     */
     config?: Record<string, unknown>;
+    /**
+     * Network→host mapping for `transport: 'discovery-adapter'` wallets. DATA,
+     * not code: the generic bridge resolves `networkHosts[activeNetwork]` at
+     * connect time and constructs the app-supplied official adapter (factory
+     * form) with it — so no wallet URL is hardcoded in SDK or app code, and an
+     * app simply sets `<PartyLayerKit network="…">`. Optional + additive: absent
+     * ⇒ the app must supply an explicit host (a pre-constructed instance); a
+     * network missing from the map is a CLEAR connect-time failure naming the
+     * unsupported network, never a silent wrong-network fallback.
+     */
+    networkHosts?: NetworkHosts;
   };
+  /**
+   * HOW THIS WALLET CONNECTS. Its own axis, deliberately separate from how the
+   * wallet is DISCOVERED (`adapter.transport`) and how its SDK is LOADED
+   * (`installation.scriptTag`).
+   *
+   *   injected — a provider on a window global (send, nightly)
+   *   popup    — `window.open` to the wallet's own origin (cantor8, walley,
+   *              cauri, oneswap, bron)
+   *   relay    — no local window at all; the connection is established on
+   *              ANOTHER DEVICE over a socket or pairing relay (loop,
+   *              walletconnect)
+   *
+   * Those three questions used to share one derived value, which is how
+   * `scriptTag` came to mean "scan": it says how the SDK is loaded, and Loop
+   * scans a QR while Cantor8 opens a popup. Deriving a subtitle from it was
+   * therefore wrong for one of them whichever label was chosen.
+   *
+   * ORDER IS MEANINGFUL. The array is preference order: `connect[0]` is what
+   * the picker tries first, and `preferInstalled: false` — the modal's "Try
+   * mobile" affordance — advances to the next entry. Console is
+   * `['injected', 'relay']`: extension first, QR fallback. That preference is
+   * real and already wired; today it is hardcoded inside Console's adapter
+   * `combined` branch, and this field is where it belongs instead.
+   *
+   * IF YOU ARE READING THIS BECAUSE YOU FOUND MULTI-ENTRY ARRAYS AND NOTHING
+   * HONOURING THE ORDER: the reader was removed, and this field has started
+   * drifting the way `scriptTag` did. Restore a reader or collapse the arrays —
+   * do not leave order undefined and let the next person infer a meaning for it.
+   * A single-entry array is the common case and satisfies ordering trivially.
+   */
+  connect?: ('injected' | 'popup' | 'relay')[];
   /** Installation detection hints */
   installation?: {
     /** Check if wallet is installed via window property */
     windowProperty?: string;
-    /** Check if wallet is installed via script tag */
+    /**
+     * The npm package whose script tag loads this wallet's SDK.
+     *
+     * ANSWERS ONLY "how is the SDK loaded". It does NOT say how the wallet
+     * connects — see `connect` above. It was previously read as a connect
+     * signal (`scriptTag` present ⇒ "scan"), which mislabelled Cantor8, a
+     * script-loaded wallet that opens a popup rather than showing a QR.
+     */
     scriptTag?: string;
     /** Check if wallet is installed via browser extension */
     extensionId?: string;
+    /** Deep link URL for mobile wallet connect */
+    deeplink?: string;
+    /** OAuth-based authentication */
+    oauth?: boolean;
   };
   /** SDK version compatibility */
   sdkVersion?: string;
@@ -73,6 +176,31 @@ export interface RegistryWalletEntry {
   version?: string;
   /** Origin allowlist (optional - if present, only these origins can connect) */
   originAllowlist?: string[];
+  /**
+   * Marks the entry as beta even when it ships in the `stable` registry
+   * channel. UIs (modal, picker, capability matrix) can use this flag to
+   * surface a "Beta" badge regardless of which channel file the entry
+   * lives in. Optional and additive — older registries omit it and the
+   * flag defaults to `false`.
+   */
+  beta?: boolean;
+  /**
+   * Optional CIP-0103 runtime detection rules. When present, the SDK +
+   * picker can match the currently-injected `window.canton` provider to
+   * this entry and surface it in the "CIP-0103 Native" section with full
+   * branding. Lets us add new CIP-0103 wallets to the ecosystem with a
+   * registry JSON update — no SDK code change required.
+   */
+  providerDetection?: ProviderDetection;
+  /**
+   * Canonical CIP-0103 support marker. When `cip0103.native === true`
+   * the picker always renders this entry in the "CIP-0103 NATIVE"
+   * section, regardless of install state. The accompanying `evidence`
+   * field is intended to be a public URL that justifies the claim
+   * (npm package readme, blog post, etc.) and may be surfaced by UIs as
+   * a tooltip / "verified" link.
+   */
+  cip0103?: Cip0103Support;
 }
 
 /**
@@ -186,15 +314,38 @@ export function validateWalletEntry(
 
   const e = entry as Record<string, unknown>;
 
+  const adapter = e.adapter as Record<string, unknown> | undefined;
+  const transport = adapter?.transport;
+  const transportValid =
+    transport === undefined ||
+    transport === 'injected' ||
+    transport === 'announce' ||
+    transport === 'discovery-adapter';
+
+  // networkHosts (when present) must be an object of string hosts keyed by
+  // network — a malformed map would otherwise surface as a runtime connect
+  // failure rather than a registry-integrity failure.
+  const networkHosts = adapter?.networkHosts;
+  const networkHostsValid =
+    networkHosts === undefined ||
+    (typeof networkHosts === 'object' &&
+      networkHosts !== null &&
+      !Array.isArray(networkHosts) &&
+      Object.values(networkHosts as Record<string, unknown>).every(
+        (h) => typeof h === 'string' && h.length > 0,
+      ));
+
   return (
     typeof e.id === 'string' &&
     typeof e.name === 'string' &&
     Array.isArray(e.supportedNetworks) &&
     typeof e.capabilities === 'object' &&
     e.capabilities !== null &&
-    typeof e.adapter === 'object' &&
-    e.adapter !== null &&
-    typeof (e.adapter as Record<string, unknown>).type === 'string' &&
+    typeof adapter === 'object' &&
+    adapter !== null &&
+    typeof adapter.type === 'string' &&
+    transportValid &&
+    networkHostsValid &&
     (e.originAllowlist === undefined || Array.isArray(e.originAllowlist))
   );
 }
@@ -202,10 +353,52 @@ export function validateWalletEntry(
 /**
  * Convert registry entry to wallet info
  */
+/**
+ * Classify a wallet's connection transport from its registry entry, using the
+ * real signals (the adapter transport and the installation hints), NOT the
+ * capability method list. Returned as a stable key that the picker maps to a
+ * display label. `undefined` when the entry carries no transport signal, so the
+ * picker can fall back to a safe generic rather than guessing.
+ */
+function classifyWalletTransport(entry: RegistryWalletEntry): string | undefined {
+  // `connect` is authoritative when present: it is the field that answers this
+  // question. Order is preference order, so the FIRST entry is the primary shape
+  // the picker will try (see the `connect` docs on RegistryWalletEntry).
+  const declared = entry.connect?.[0];
+  if (declared === 'relay') return 'relay';
+  if (declared === 'popup') return 'popup';
+  if (declared === 'injected') {
+    return entry.installation?.deeplink || entry.capabilities.mobileConnect
+      ? 'extensionMobile'
+      : 'extension';
+  }
+
+  const inst = entry.installation;
+  // Popup/remote wallets are bridged through the generic discovery adapter
+  // (e.g. Walley), so the adapter transport is the authoritative signal.
+  if (entry.adapter?.transport === 'discovery-adapter') return 'popup';
+  if (inst?.oauth) return 'enterprise';
+  if (inst?.windowProperty && (inst.deeplink || entry.capabilities.mobileConnect)) {
+    return 'extensionMobile';
+  }
+  if (inst?.windowProperty) return 'extension';
+  // Mobile wallets connect by deep link or a mobile-connect relay (e.g.
+  // WalletConnect: installation.remote + capabilities.mobileConnect).
+  if (inst?.deeplink || entry.capabilities.mobileConnect) return 'mobile';
+  // A script-injected SDK wallet connects by opening its own QR/popup flow.
+  // `scriptTag` no longer answers this question — it says how the SDK is LOADED,
+  // and that is why Cantor8 (script-loaded, opens a popup) read as "scan". An
+  // entry that has not yet declared `connect` falls through to the remaining
+  // hints rather than guessing from the loader.
+  if (entry.capabilities.remoteSigner) return 'enterprise';
+  return undefined;
+}
+
 export function registryEntryToWalletInfo(
   entry: RegistryWalletEntry,
   channel: RegistryChannel
 ): WalletInfo {
+  const transport = classifyWalletTransport(entry);
   const capabilities: CapabilityKey[] = ['connect', 'disconnect'];
   if (entry.capabilities.signMessage) {
     capabilities.push('signMessage');
@@ -216,8 +409,29 @@ export function registryEntryToWalletInfo(
   if (entry.capabilities.submitTransaction) {
     capabilities.push('submitTransaction');
   }
-  if (entry.capabilities.transactionStatus) {
+  // Decoupled: `events` is derived from the EXPLICIT `events` flag — emitting
+  // provider events — NOT from `transactionStatus` (which only means the wallet
+  // can report tx status). A wallet that can await a tx commit but never emits
+  // events (e.g. Walley) no longer falsely claims the `events` capability.
+  // The four the registry could not express. A table rather than four branches:
+  // adding the fifth is a word, not a block, and it costs fewer bytes on the two
+  // budgets this conversion sits inside.
+  for (const k of ['transfer', 'ledgerApi', 'popup', 'restore'] as const) {
+    if (entry.capabilities[k]) capabilities.push(k);
+  }
+  if (entry.capabilities.events) {
     capabilities.push('events');
+  }
+
+  // Transport capabilities — inferred from installation hints and capability flags
+  if (entry.installation?.windowProperty) {
+    capabilities.push('injected');
+  }
+  if (entry.installation?.deeplink || entry.capabilities.mobileConnect) {
+    capabilities.push('deeplink');
+  }
+  if (entry.capabilities.remoteSigner) {
+    capabilities.push('remoteSigner');
   }
 
   return {
@@ -235,7 +449,19 @@ export function registryEntryToWalletInfo(
       ? {
           injectedKey: entry.installation.windowProperty,
           extensionId: entry.installation.extensionId,
-          deepLinkScheme: entry.installation.scriptTag,
+          // `deepLinkScheme` was assigned `installation.scriptTag` — an npm
+          // package name (`@fivenorth/loop-sdk`) in a field documented as a deep
+          // link scheme (`loop://`). Unconditional, so every scriptTag wallet
+          // carried a wrong value here, while `installation.deeplink` — the real
+          // one — was never mapped at all. Nothing in the SDK read the field, so
+          // it was inert: wrong value, right value dropped, and it would have
+          // shipped broken the day something read it.
+          //
+          // Both halves are fixed: scriptTag goes to `scriptTag`, where it
+          // answers the question it actually answers (how the SDK is LOADED),
+          // and the deeplink is mapped through.
+          deepLinkScheme: entry.installation.deeplink,
+          scriptTag: entry.installation.scriptTag,
         }
       : undefined,
     adapter: {
@@ -244,12 +470,35 @@ export function registryEntryToWalletInfo(
     },
     docs: entry.homepage ? [entry.homepage] : [],
     minSdkVersion: entry.sdkVersion,
+    // KNOWN OPEN DEFECT — see `docs/open-findings.md` #1. This is populated and
+    // read by nothing: `WalletInfo.networks` has zero consumers across sdk,
+    // react and core, so a mainnet-only wallet is offered on a devnet picker.
+    // Open pending a decision about whether the picker or the app filters.
     networks: entry.supportedNetworks,
     channel,
-    // Store origin allowlist in metadata for SDK enforcement
-    ...(entry.originAllowlist
-      ? { metadata: { originAllowlist: JSON.stringify(entry.originAllowlist) } }
+    // Adapter metadata is exposed to the picker via WalletInfo.metadata
+    // (typed `Record<string, string>`). Two flags routed through here today:
+    //   - originAllowlist: SDK-side origin enforcement
+    //   - beta:            UI badge ("Beta" tag in modal + capability matrix)
+    // Both are optional — only emitted when the registry entry sets them.
+    ...((entry.originAllowlist || entry.beta || transport)
+      ? {
+          metadata: {
+            ...(entry.originAllowlist
+              ? { originAllowlist: JSON.stringify(entry.originAllowlist) }
+              : {}),
+            ...(entry.beta ? { beta: 'true' } : {}),
+            // Transport class (extension / extensionMobile / mobile / popup /
+            // scan / enterprise) → the picker's clean subtitle label.
+            ...(transport ? { transport } : {}),
+          },
+        }
       : {}),
+    // CIP-0103 runtime-detection rules pass through verbatim when present;
+    // see WalletInfo.providerDetection for how the picker uses them.
+    ...(entry.providerDetection ? { providerDetection: entry.providerDetection } : {}),
+    // Canonical CIP-0103 support marker.
+    ...(entry.cip0103 ? { cip0103: entry.cip0103 } : {}),
   };
 }
 

@@ -15,7 +15,7 @@ A minimal but real dApp demonstrating PartyLayer integration using only the publ
 
 1. **Registry Server Running**
    ```bash
-   # From wallet-sdk root
+   # From PartyLayer root
    cd apps/registry-server
    pnpm build
    pnpm start
@@ -30,7 +30,7 @@ A minimal but real dApp demonstrating PartyLayer integration using only the publ
 ## Installation
 
 ```bash
-# From wallet-sdk root
+# From PartyLayer root
 cd examples/test-dapp
 pnpm install
 ```
@@ -214,11 +214,11 @@ export const client = createPartyLayer({
 
 ### Error: "Module not found: @partylayer/sdk"
 **Cause:** Packages not installed  
-**Fix:** Run `pnpm install` from wallet-sdk root (workspace setup)
+**Fix:** Run `pnpm install` from PartyLayer root (workspace setup)
 
 ### Registry Status: "Not Verified"
-**Cause:** Registry signature invalid or missing  
-**Fix:** Verify registry signatures: `pnpm registry:verify --channel stable`
+**Cause:** Expected. No registry signature is published, and verification only runs when a consumer passes `registryPublicKeys` (see `SIGNING.md`), so this is the normal state rather than a fault.  
+**Fix:** Nothing to fix. To confirm the registry parsed, check that wallets are listed; `pnpm gate:registry` validates its shape.
 
 ### Session Not Restoring
 **Cause:** Wallet doesn't support restore, or storage cleared  

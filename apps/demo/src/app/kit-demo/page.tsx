@@ -4,12 +4,29 @@ import { useState, useEffect, createContext, useContext } from 'react';
 import {
   PartyLayerKit,
   ConnectButton,
-  useSession,
+  useClientSession,
   useWallets,
   useSignMessage,
   usePartyLayer,
+  themes,
+  accentPresets,
+  PartyAvatar,
+  LanguageSelector,
+  type PartyLayerLocale,
 } from '@partylayer/react';
+import { isCip0103Native } from '@partylayer/sdk';
 import { useBreakpoint, responsive } from '../hooks/useBreakpoint';
+// Devnet showcases opt into beta so newly integrated wallets are usable before
+// stable promotion. The shared adapter set supplies their official factories.
+import { buildDemoAdapters } from '../../lib/canton-demo-adapter';
+import { WC_METADATA, wcProjectId } from '../../lib/walletconnect-demo';
+
+import { sortByCanonicalOrder, CANONICAL_WALLET_ORDER } from '../../lib/wallet-order';
+import { DEMO_WALLET_ICONS } from '../../lib/demo-registry';
+import { registryIconUrl } from '../../lib/registry-icon';
+const DEMO_ADDITIONAL_ADAPTERS = buildDemoAdapters();
+const DEMO_WALLET_CONNECT = { projectId: wcProjectId(), metadata: WC_METADATA };
+
 
 // ─── Design Tokens (light + dark, matching marketing/landing page) ──────────
 
@@ -80,24 +97,10 @@ function useTokens(): Tokens { return useContext(TokensContext); }
 const font = 'ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, "Helvetica Neue", Arial, sans-serif';
 const textOnBrand = '#0B0F1A'; // always dark text on yellow brand buttons
 
-// ─── Wallet Logo Map (matching marketing tokens exactly) ────────────────────
-
-const WALLET_LOGOS: Record<string, string> = {
-  console: '/wallets/console.png',
-  loop: '/wallets/loop.svg',
-  cantor8: '/wallets/cantor8.png',
-  bron: '/wallets/bron.png',
-  nightly: '/wallets/nightly.svg',
-};
-
-function getWalletLogo(walletId: string): string | null {
-  const id = walletId.replace(/^cip0103:/, '');
-  if (WALLET_LOGOS[id]) return WALLET_LOGOS[id];
-  for (const [key, url] of Object.entries(WALLET_LOGOS)) {
-    if (id.toLowerCase().includes(key)) return url;
-  }
-  return null;
-}
+// Wallet marks come from the registry (single source): each card receives the
+// registry entry's `iconUrl`, which the demo serves locally at
+// `/registry/wallets/<file>` (copied from the branch's registry/ by
+// scripts/copy-registry.mjs). No hand-maintained logo map here.
 
 // ─── Inner Content ──────────────────────────────────────────────────────────
 
@@ -105,14 +108,25 @@ function DemoContent() {
   const bp = useBreakpoint();
   const c = useTokens();
   const shadow = c.shadow;
-  const session = useSession();
+  const session = useClientSession();
   const { wallets, isLoading } = useWallets();
   const { signMessage, isSigning, error: signError } = useSignMessage();
   const client = usePartyLayer();
   const [signResult, setSignResult] = useState<string | null>(null);
 
-  const nativeWallets = wallets.filter((w) => w.metadata?.source === 'native-cip0103');
-  const registryWallets = wallets.filter((w) => !w.metadata?.source);
+  // Same definition as the modal's "CIP-0103 Native" section (the registry
+  // cip0103.native flag via isCip0103Native). The previous filter counted the
+  // pre-registry runtime-promotion marker (metadata.source === 'native-cip0103'),
+  // which no longer exists, so this panel showed 0 while the modal showed the
+  // registry count. One predicate, one number.
+  const nativeWallets = sortByCanonicalOrder(
+    wallets.filter((w) => isCip0103Native(w)),
+    (w) => w.walletId
+  );
+  const registryWallets = sortByCanonicalOrder(
+    wallets.filter((w) => !isCip0103Native(w)),
+    (w) => w.walletId
+  );
 
   const handleSign = async () => {
     setSignResult(null);
@@ -206,8 +220,9 @@ function DemoContent() {
                       <WalletCard
                         key={w.walletId}
                         name={w.name}
-                        walletId={w.walletId}
+                        beta={w.metadata?.beta === 'true'}
                         capabilities={w.capabilities}
+                        iconUrl={w.icons?.sm}
                         isNative
                       />
                     ))}
@@ -224,8 +239,9 @@ function DemoContent() {
                       <WalletCard
                         key={w.walletId}
                         name={w.name}
-                        walletId={w.walletId}
+                        beta={w.metadata?.beta === 'true'}
                         capabilities={w.capabilities}
+                        iconUrl={w.icons?.sm}
                         website={w.website}
                       />
                     ))}
@@ -471,20 +487,23 @@ function SectionLabel({ label, count }: { label: string; count: number }) {
 
 function WalletCard({
   name,
-  walletId,
   capabilities,
   isNative,
   website,
+  iconUrl,
+  beta,
 }: {
+  beta?: boolean;
   name: string;
-  walletId: string;
   capabilities: string[];
   isNative?: boolean;
   website?: string;
+  iconUrl?: string;
 }) {
   const c = useTokens();
   const shadow = c.shadow;
-  const logo = getWalletLogo(walletId);
+  // The registry icon (served locally) is the single source for the mark.
+  const logo = iconUrl ? registryIconUrl(iconUrl) : null;
 
   return (
     <div style={{
@@ -541,8 +560,8 @@ function WalletCard({
           <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
             <span style={{ fontWeight: 600, fontSize: '15px', color: c.fg }}>{name}</span>
 
-            {/* Verified badge (matching marketing badge-verified) */}
-            <span style={{
+            {/* Catalog inclusion is not a claim of live transaction certification. */}
+            <span title="Catalog integration status; not a certification of live send or swap tests." style={{
               display: 'inline-flex',
               alignItems: 'center',
               gap: '3px',
@@ -553,10 +572,10 @@ function WalletCard({
               borderRadius: '6px',
               fontWeight: 600,
             }}>
-              <svg width="10" height="10" fill={c.brand600} viewBox="0 0 20 20">
+              {!beta && <svg width="10" height="10" fill={c.brand600} viewBox="0 0 20 20">
                 <path fillRule="evenodd" d="M16.403 12.652a3 3 0 000-5.304 3 3 0 00-3.75-3.751 3 3 0 00-5.305 0 3 3 0 00-3.751 3.75 3 3 0 000 5.305 3 3 0 003.75 3.751 3 3 0 005.305 0 3 3 0 003.751-3.75zm-2.546-4.46a.75.75 0 00-1.214-.883l-3.483 4.79-1.88-1.88a.75.75 0 10-1.06 1.061l2.5 2.5a.75.75 0 001.137-.089l4-5.5z" clipRule="evenodd" />
-              </svg>
-              Verified
+              </svg>}
+              {beta ? 'Beta' : 'Catalog'}
             </span>
 
             {/* CIP-0103 badge for native */}
@@ -712,6 +731,12 @@ function CodeBlock() {
 export default function KitDemoPage() {
   const [mounted, setMounted] = useState(false);
   const [theme, setTheme] = useState<'light' | 'dark' | 'auto'>('light');
+  const [family, setFamily] = useState<'default' | 'midnight' | 'slate' | 'teal' | 'gold' | 'warm'>('default');
+  const [accent, setAccent] = useState<'default' | 'blue' | 'green' | 'purple' | 'orange' | 'pink' | 'red'>('default');
+  const [showAttr, setShowAttr] = useState(true);
+  const [locale, setLocale] = useState<PartyLayerLocale>('en');
+  const [direction, setDirection] = useState<'ltr' | 'rtl' | undefined>(undefined);
+  const [accountStatus, setAccountStatus] = useState<'full' | 'avatar' | 'address'>('full');
   const [systemDark, setSystemDark] = useState(false);
 
   useEffect(() => { setMounted(true); }, []);
@@ -730,20 +755,65 @@ export default function KitDemoPage() {
   const isDark = theme === 'dark' || (theme === 'auto' && systemDark);
   const c = isDark ? darkTokens : lightTokens;
 
+  // Build the theme passed to PartyLayerKit from the selected family + the
+  // light/dark choice + the accent. The family resolves to its callable
+  // light/dark pair from the `themes` catalog; the accent override then composes
+  // on top (all family themes are callable). 'default' = the base yellow family,
+  // so family='default' with no accent reproduces exactly today's look. For
+  // 'auto' we pass the dynamic { lightMode, darkMode } form so it follows the OS
+  // preference AND stays on the chosen family and accent.
+  const accentOverride = accent === 'default' ? undefined : accentPresets[accent];
+  const fam = themes[family];
+  const kitTheme =
+    theme === 'auto'
+      ? { lightMode: fam.light(accentOverride), darkMode: fam.dark(accentOverride) }
+      : theme === 'dark'
+        ? fam.dark(accentOverride)
+        : fam.light(accentOverride);
+
+  const ACCENT_SWATCHES = [
+    { key: 'default', color: '#FFCC00', label: 'Default' },
+    { key: 'blue', color: '#3B82F6', label: 'Blue' },
+    { key: 'green', color: '#10B981', label: 'Green' },
+    { key: 'purple', color: '#7B3FE4', label: 'Purple' },
+    { key: 'orange', color: '#F97316', label: 'Orange' },
+    { key: 'pink', color: '#EC4899', label: 'Pink' },
+    { key: 'red', color: '#EF4444', label: 'Red' },
+  ] as const;
+
+  // The professional theme families for the gallery. Colors are read live from
+  // the exported `themes` catalog, so the swatches always reflect the real
+  // palettes. 'default' is the base yellow family (themes.default).
+  const FAMILY_CARDS = [
+    { key: 'default', label: 'Default', descriptor: 'brand' },
+    { key: 'midnight', label: 'Midnight', descriptor: 'navy' },
+    { key: 'slate', label: 'Slate', descriptor: 'neutral' },
+    { key: 'teal', label: 'Teal', descriptor: 'trading' },
+    { key: 'gold', label: 'Gold', descriptor: 'premium' },
+    { key: 'warm', label: 'Warm', descriptor: 'rose' },
+  ] as const;
+
   if (!mounted) return (
-    <div style={{
+    <main style={{
       minHeight: '100vh', display: 'flex', flexDirection: 'column',
       alignItems: 'center', justifyContent: 'center', gap: 16,
-      background: '#FFFFFF', fontFamily: font,
+      background: '#FFFFFF', color: '#0B0F1A', fontFamily: font,
+      padding: '32px 24px', textAlign: 'center',
     }}>
-      <img src="/favicon-new.svg" alt="" width={48} height={48} style={{ opacity: 0.7 }} />
-      <div style={{
-        width: 32, height: 32, border: '3px solid #EEF0F4',
-        borderTopColor: '#FFCC00', borderRadius: '50%',
-        animation: 'plSpin .7s linear infinite',
-      }} />
-      <style>{`@keyframes plSpin { to { transform: rotate(360deg); } }`}</style>
-    </div>
+      <img src="/favicon-new.svg" alt="" width={48} height={48} />
+      <h1 style={{ margin: 0, fontSize: 'clamp(1.5rem, 4vw, 2.5rem)', lineHeight: 1.2 }}>
+        Canton wallet connection playground
+      </h1>
+      <p style={{ maxWidth: 560, margin: 0, lineHeight: 1.6, color: '#475569' }}>
+        Explore PartyLayerKit themes, the Connect Wallet button and supported Canton wallet integrations.
+        This demo uses Devnet and includes beta wallets. Real connections require your own wallet account and approval.
+      </p>
+      <nav aria-label="Playground setup guides" style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'center', gap: 20 }}>
+        <a href="/docs/quick-start" style={{ color: '#806000' }}>React and Next.js quick start</a>
+        <a href="/wallets" style={{ color: '#806000' }}>Wallet networks and capabilities</a>
+      </nav>
+      <p role="status" style={{ color: '#475569', margin: 0 }}>Loading interactive controls…</p>
+    </main>
   );
 
   return (
@@ -755,7 +825,7 @@ export default function KitDemoPage() {
         fontFamily: font,
         transition: 'background-color 200ms, color 200ms',
       }}>
-        <PartyLayerKit network="devnet" appName="PartyLayer Kit Demo" theme={theme} walletIcons={WALLET_LOGOS}>
+        <PartyLayerKit locale={locale} direction={direction} network="devnet" channel="beta" appName="PartyLayer Kit Demo" theme={kitTheme} showAttribution={showAttr} walletOrder={CANONICAL_WALLET_ORDER} walletIcons={DEMO_WALLET_ICONS} additionalAdapters={DEMO_ADDITIONAL_ADAPTERS} walletConnect={DEMO_WALLET_CONNECT} registryUrl="/registry">
           <div style={{ maxWidth: '880px', margin: '0 auto', padding: '0 24px' }}>
 
             {/* Navbar */}
@@ -779,13 +849,14 @@ export default function KitDemoPage() {
                 />
               </div>
 
-              <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
                 {/* Theme toggle */}
                 <div style={{
                   display: 'flex',
                   borderRadius: '10px',
                   border: `1px solid ${c.border}`,
                   overflow: 'hidden',
+                  flexShrink: 0,
                 }}>
                   {(['light', 'dark', 'auto'] as const).map((t) => (
                     <button
@@ -808,9 +879,186 @@ export default function KitDemoPage() {
                   ))}
                 </div>
 
-                <ConnectButton />
+                <ConnectButton accountStatus={accountStatus} />
               </div>
             </nav>
+
+            {/* Theming showcase: pick an accent, then open Connect to see the button,
+                modal, and connecting glow all retint live (RainbowKit-style theming). */}
+            <div style={{
+              display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '10px',
+              padding: '14px 16px', marginTop: '20px',
+              borderRadius: '12px', border: `1px solid ${c.border}`, backgroundColor: c.muted,
+            }}>
+              <span style={{ fontSize: '13px', fontWeight: 600, color: c.fg }}>Accent</span>
+              <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                {ACCENT_SWATCHES.map((sw) => {
+                  const selected = accent === sw.key;
+                  return (
+                    <button
+                      key={sw.key}
+                      onClick={() => setAccent(sw.key)}
+                      title={sw.label}
+                      aria-label={sw.label}
+                      style={{
+                        width: '26px', height: '26px', borderRadius: '50%',
+                        background: sw.color, cursor: 'pointer',
+                        border: selected ? `2px solid ${c.fg}` : `2px solid transparent`,
+                        boxShadow: selected ? `0 0 0 2px ${c.bg}, 0 0 0 4px ${sw.color}55` : 'none',
+                        transition: 'transform 120ms, box-shadow 120ms',
+                        transform: selected ? 'scale(1.08)' : 'scale(1)',
+                      }}
+                    />
+                  );
+                })}
+              </div>
+
+              {/* Powered-by attribution toggle (footer of the connect modal) */}
+              <button
+                onClick={() => setShowAttr((v) => !v)}
+                style={{
+                  display: 'inline-flex', alignItems: 'center', gap: '8px',
+                  padding: '6px 12px', borderRadius: '8px', cursor: 'pointer',
+                  border: `1px solid ${c.border}`, background: c.bg, color: c.fg,
+                  fontSize: '12px', fontWeight: 500, fontFamily: font,
+                }}
+              >
+                <span style={{
+                  width: '30px', height: '18px', borderRadius: '9px', position: 'relative',
+                  background: showAttr ? '#10B981' : c.border, transition: 'background 150ms',
+                }}>
+                  <span style={{
+                    position: 'absolute', top: '2px', left: showAttr ? '14px' : '2px',
+                    width: '14px', height: '14px', borderRadius: '50%', background: '#fff',
+                    transition: 'left 150ms', boxShadow: '0 1px 2px rgba(0,0,0,0.2)',
+                  }} />
+                </span>
+                showAttribution
+              </button>
+
+              <LanguageSelector aria-label="Wallet UI language" value={locale} onChange={next => { setLocale(next); setDirection(undefined); }} />
+              <label style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '12px', color: c.slate500 }}>
+                <input type="checkbox" checked={(direction ?? (locale === 'ar' ? 'rtl' : 'ltr')) === 'rtl'} onChange={event => setDirection(event.target.checked ? 'rtl' : 'ltr')} /> RTL
+              </label>
+              <span style={{ fontSize: '12px', color: c.slate500, marginLeft: 'auto' }}>
+                {accent === 'default'
+                  ? `<PartyLayerKit showAttribution={${showAttr}}>`
+                  : `theme={darkTheme({ ...accentPresets.${accent} })}`}
+              </span>
+            </div>
+
+            {/* Theme gallery: pick one of the professional theme families and it
+                retints the ConnectButton, modal, connecting glow, and dropdown live.
+                The accent picker above still composes on top of the chosen family. */}
+            <div style={{
+              padding: '14px 16px', marginTop: '10px',
+              borderRadius: '12px', border: `1px solid ${c.border}`, backgroundColor: c.muted,
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap', marginBottom: '12px' }}>
+                <span style={{ fontSize: '13px', fontWeight: 600, color: c.fg }}>Theme gallery</span>
+                <span style={{ fontSize: '12px', color: c.slate500 }}>
+                  pick a family, then open Connect to see it applied
+                </span>
+                <span style={{ fontSize: '12px', color: c.slate500, marginLeft: 'auto' }}>
+                  {family === 'default'
+                    ? '<PartyLayerKit theme={kitTheme}>'
+                    : `themes.${family}.${theme === 'dark' ? 'dark' : 'light'}(accent)`}
+                </span>
+              </div>
+              <div style={{
+                display: 'grid',
+                gridTemplateColumns: `repeat(auto-fit, minmax(${bp === 'mobile' ? '96px' : '116px'}, 1fr))`,
+                gap: '10px',
+              }}>
+                {FAMILY_CARDS.map((fc) => {
+                  const pair = themes[fc.key];
+                  const lightBg = pair.light.colors.background;
+                  const lightDot = pair.light.colors.primary;
+                  const darkBg = pair.dark.colors.background;
+                  const darkDot = pair.dark.colors.primary;
+                  const selected = family === fc.key;
+                  return (
+                    <button
+                      key={fc.key}
+                      onClick={() => setFamily(fc.key)}
+                      title={`${fc.label} (${fc.descriptor})`}
+                      aria-label={`${fc.label} theme family, ${fc.descriptor}`}
+                      aria-pressed={selected}
+                      style={{
+                        display: 'flex', flexDirection: 'column', gap: '8px',
+                        padding: '10px', cursor: 'pointer', textAlign: 'left',
+                        borderRadius: '10px',
+                        border: selected ? `2px solid ${c.fg}` : `2px solid ${c.border}`,
+                        background: c.bg,
+                        boxShadow: selected ? `0 0 0 2px ${c.bg}, 0 0 0 4px ${lightDot}55` : 'none',
+                        transform: selected ? 'scale(1.03)' : 'scale(1)',
+                        transition: 'transform 120ms, box-shadow 120ms, border-color 120ms',
+                        fontFamily: font,
+                      }}
+                    >
+                      {/* Split swatch: light variant on the left, dark on the right,
+                          each showing its background with its accent dot. */}
+                      <div style={{
+                        display: 'flex', width: '100%', height: '38px',
+                        borderRadius: '8px', overflow: 'hidden', border: `1px solid ${c.border}`,
+                      }}>
+                        <div style={{ flex: 1, background: lightBg, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                          <span style={{ width: '12px', height: '12px', borderRadius: '50%', background: lightDot }} />
+                        </div>
+                        <div style={{ flex: 1, background: darkBg, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                          <span style={{ width: '12px', height: '12px', borderRadius: '50%', background: darkDot }} />
+                        </div>
+                      </div>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '1px' }}>
+                        <span style={{ fontSize: '12px', fontWeight: 600, color: c.fg }}>{fc.label}</span>
+                        <span style={{ fontSize: '10px', color: c.slate500 }}>{fc.descriptor}</span>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Connected-button avatar showcase: accountStatus control + a preview of
+                the deterministic avatar across sample party ids. Connect a wallet
+                above to see the real connected button (with the avatar + dropdown). */}
+            <div style={{
+              display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '12px',
+              padding: '14px 16px', marginTop: '10px',
+              borderRadius: '12px', border: `1px solid ${c.border}`, backgroundColor: c.muted,
+            }}>
+              <span style={{ fontSize: '13px', fontWeight: 600, color: c.fg }}>accountStatus</span>
+              <div style={{ display: 'inline-flex', borderRadius: '8px', overflow: 'hidden', border: `1px solid ${c.border}` }}>
+                {(['full', 'avatar', 'address'] as const).map((s) => (
+                  <button
+                    key={s}
+                    onClick={() => setAccountStatus(s)}
+                    style={{
+                      padding: '6px 12px', fontSize: '12px', fontWeight: 500, cursor: 'pointer',
+                      border: 'none', fontFamily: font,
+                      background: accountStatus === s ? c.brand500 : c.bg,
+                      color: accountStatus === s ? '#0B0F1A' : c.fg,
+                    }}
+                  >
+                    {s}
+                  </button>
+                ))}
+              </div>
+
+              <span style={{ fontSize: '12px', color: c.slate500 }}>deterministic avatars:</span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                {['party-alice::1220ab', 'party-bob::99f7c2', 'party-carol::5e3d10', 'party-dave::77aa01'].map((id) => (
+                  <div key={id} title={id} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '4px' }}>
+                    <PartyAvatar id={id} size={28} />
+                    <span style={{ fontSize: '10px', color: c.slate500, fontFamily: 'ui-monospace, monospace' }}>{id.split('::')[0].replace('party-', '')}</span>
+                  </div>
+                ))}
+              </div>
+
+              <span style={{ fontSize: '12px', color: c.slate500, marginLeft: 'auto' }}>
+                Connect above to see the connected button
+              </span>
+            </div>
 
             {/* Hero Section */}
             <section style={{ padding: responsive(bp, '32px 0 28px', '40px 0 36px', '48px 0 40px') }}>
@@ -852,7 +1100,9 @@ export default function KitDemoPage() {
                     left: 0,
                     width: '100%',
                     height: '12px',
-                    backgroundColor: c.brand100,
+                    // brand100 on dark (#2A2510) reads muddy behind light text;
+                    // a translucent brand yellow reads as a proper highlight.
+                    backgroundColor: isDark ? 'rgba(255, 204, 0, 0.30)' : c.brand100,
                     zIndex: 0,
                     transform: 'skewX(-3deg)',
                   }} />
@@ -867,14 +1117,14 @@ export default function KitDemoPage() {
                 lineHeight: 1.6,
                 maxWidth: '520px',
               }}>
-                CIP-0103 native wallet discovery with automatic registry fallback.
-                Connect any Canton wallet in 3 lines of code.
+                Discover supported wallets through CIP-0103 and the PartyLayer registry.
+                Reviewed wallet runtimes and a branded connection UI come with the kit.
               </p>
 
               {/* Feature badges */}
               <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
                 {[
-                  { label: 'CIP-0103 Compliant', hasIcon: true },
+                  { label: 'CIP-0103 Integration', hasIcon: true },
                   { label: 'Auto-Discovery', hasIcon: false },
                   { label: 'Devnet', hasIcon: false },
                 ].map((badge) => (

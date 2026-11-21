@@ -1,0 +1,161 @@
+/**
+ * Allocations section. Exercises the remaining three CIP-0056 hooks:
+ *  - useTokenAllocations reads the funded-allocation list (typed view),
+ *  - useAllocationInstruction creates an allocation via the factory,
+ *  - useAllocationAction acts on a funded allocation (executeTransfer/cancel/withdraw).
+ * The demo backend returns fixture results for the writes; a real dApp performs the
+ * registry-specific factory/context flow inside these fetchers (see the README).
+ */
+import { useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
+import {
+  useTokenAllocations,
+  useAllocationInstruction,
+  useAllocationAction,
+  type AllocationActionKind,
+} from '@partylayer/react/query';
+import { TransactionToast } from '@partylayer/react';
+import { useDemo, partyKey } from '../context/DemoContext';
+import { Card, AsyncView, Badge } from '../ui/primitives';
+import { toastStatus } from '../lib/mutation';
+import { invalidateAllocations } from '../lib/invalidate';
+import { formatAmount } from '../lib/format';
+
+const ACTIONS: { kind: AllocationActionKind; label: string }[] = [
+  { kind: 'executeTransfer', label: 'Execute' },
+  { kind: 'cancel', label: 'Cancel' },
+  { kind: 'withdraw', label: 'Withdraw' },
+];
+
+export function Allocations() {
+  const { party, backend } = useDemo();
+  const queryClient = useQueryClient();
+
+  const q = useTokenAllocations({
+    read: (signal) => backend.readAllocations(signal),
+    key: partyKey('allocations', party),
+  });
+
+  const create = useAllocationInstruction<{ ok: true }>({
+    submit: (request, signal) => backend.submitAllocation(request, signal),
+    mutation: {
+      onSuccess: () => invalidateAllocations(queryClient),
+    },
+  });
+
+  const act = useAllocationAction<{ ok: true }>({
+    submit: (request, signal) => backend.submitAllocationAction(request, signal),
+    mutation: {
+      onSuccess: () => invalidateAllocations(queryClient),
+    },
+  });
+
+  // The row actions share one act mutation across every row and kind; track the target
+  // (cid plus kind) so the Submitting label shows on the clicked button alone (A8).
+  const [pendingAct, setPendingAct] = useState<string | null>(null);
+
+  const createDemoAllocation = () => {
+    // Build the standard AllocationFactory_Allocate request from the issuer as admin.
+    // Party fields are demo KEYS (A3): the gateway maps a key to its ledger id inbound,
+    // so the live sender is the real party with holdings, not a stale fixture id.
+    create.submitAllocation({
+      expectedAdmin: 'issuer',
+      allocation: {
+        settlement: {
+          executor: 'issuer',
+          settlementRef: { id: 'settlement-demo-new' },
+          requestedAt: new Date().toISOString(),
+          allocateBefore: '2027-01-01T00:00:00Z',
+          settleBefore: '2027-01-01T00:00:00Z',
+        },
+        transferLegId: 'leg-new',
+        transferLeg: {
+          sender: party,
+          receiver: 'bob',
+          amount: '5.00',
+          instrumentId: { admin: 'issuer', id: 'DEMO' },
+        },
+      },
+      requestedAt: new Date().toISOString(),
+      inputHoldingCids: [],
+      meta: { demo: 'true' },
+    });
+  };
+
+  const busy = create.isPending || act.isPending;
+
+  return (
+    <Card title="Allocations" hint="useTokenAllocations + useAllocationInstruction + useAllocationAction">
+      <div className="alloc-head">
+        <span className="muted">Funded allocations for a settlement leg.</span>
+        <button className="btn btn-ghost" onClick={createDemoAllocation} disabled={busy}>
+          {create.isPending ? 'Submitting...' : 'Create demo allocation'}
+        </button>
+      </div>
+
+      <AsyncView
+        isPending={q.isPending}
+        error={q.error}
+        data={q.allocations}
+        isEmpty={(a) => a.length === 0}
+        empty="No allocations."
+      >
+        {(refs) => (
+          <ul className="list">
+            {refs.map(({ cid, allocation: a }) => {
+              const leg = a.allocation.transferLeg;
+              const settle = a.allocation.settlement;
+              return (
+                <li key={cid} className="row row-block">
+                  <div className="row-main">
+                    <div className="row-title">
+                      {formatAmount(leg.amount)} <span className="muted">{leg.instrumentId.id}</span>{' '}
+                      <Badge tone="neutral">leg {a.allocation.transferLegId}</Badge>
+                    </div>
+                    <div className="row-sub muted">
+                      {leg.sender} to {leg.receiver}
+                    </div>
+                    <div className="row-sub muted">
+                      executor {settle.executor} · settle before {settle.settleBefore.slice(0, 10)} ·{' '}
+                      {a.holdingCids.length} holding{a.holdingCids.length === 1 ? '' : 's'}
+                    </div>
+                  </div>
+                  <div className="row-actions">
+                    {ACTIONS.map((action) => (
+                      <button
+                        key={action.kind}
+                        className="btn btn-ghost btn-small"
+                        disabled={busy}
+                        // The ref carries the ACS contract id, which feeds allocationCid.
+                        onClick={() => {
+                          setPendingAct(cid + ':' + action.kind);
+                          act.submitAction({ allocationCid: cid, action: action.kind });
+                        }}
+                      >
+                        {act.isPending && pendingAct === cid + ':' + action.kind
+                          ? 'Submitting...'
+                          : action.label}
+                      </button>
+                    ))}
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </AsyncView>
+
+      <TransactionToast
+        status={toastStatus(create.isPending || create.isSuccess || create.isError ? create : act)}
+        error={create.error ?? act.error}
+        message={
+          create.isSuccess
+            ? 'Allocation created.'
+            : act.isSuccess
+              ? 'Allocation action submitted.'
+              : undefined
+        }
+      />
+    </Card>
+  );
+}

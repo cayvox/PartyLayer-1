@@ -16,9 +16,10 @@ const t = {
   brand50: '#FFFBEB',
   brand100: '#FFF5CC',
   brand500: '#FFCC00',
-  brand600: '#E6B800',
+  brand600: '#806000',
   slate300: '#CBD5E1',
-  slate400: '#94A3B8',
+  slate400: '#475569',
+  codeMuted: '#94A3B8',
   slate500: '#64748B',
   slate600: '#475569',
   slate700: '#334155',
@@ -56,9 +57,13 @@ const SIDEBAR_NAV = [
   {
     category: 'Overview',
     items: [
-      { label: 'Introduction', href: '/docs/introduction' },
+      { label: 'Introduction', href: '/docs' },
       { label: 'Installation', href: '/docs/installation' },
       { label: 'Quick Start', href: '/docs/quick-start' },
+      { label: 'Migration', href: '/docs/migration' },
+      { label: 'AI Integration', href: '/docs/ai-integration' },
+      { label: 'RainbowKit for Canton', href: '/docs/rainbowkit-for-canton' },
+      { label: 'Integration Support', href: '/docs/integration-support' },
     ],
   },
   {
@@ -76,15 +81,42 @@ const SIDEBAR_NAV = [
       { label: 'React Hooks', href: '/docs/hooks' },
       { label: 'Vanilla JS', href: '/docs/vanilla-js' },
       { label: 'Wallets & Adapters', href: '/docs/wallets' },
+      { label: 'Send', href: '/docs/wallets/send' },
       { label: 'CIP-0103 Provider', href: '/docs/cip-0103' },
+      { label: 'Generic Bridge', href: '/docs/generic-bridge' },
+      { label: 'wagmi for Canton', href: '/docs/wagmi-for-canton' },
     ],
   },
   {
     category: 'Guides',
     items: [
+      { label: 'Dev & Staging', href: '/docs/dev-and-staging' },
+      { label: 'Canton Topology', href: '/docs/partylayer-and-canton-topology' },
       { label: 'Error Handling', href: '/docs/error-handling' },
+      { label: 'Authentication', href: '/docs/authentication' },
       { label: 'TypeScript Types', href: '/docs/typescript' },
+      { label: 'Wallet Balances', href: '/docs/wallet-balances' },
+      { label: 'Token Transfers', href: '/docs/token-transfers' },
+      { label: 'Transaction Lifecycle', href: '/docs/transaction-lifecycle' },
+      { label: 'Swap Integration', href: '/docs/swaps' },
       { label: 'Advanced', href: '/docs/advanced' },
+    ],
+  },
+  {
+    category: 'Cookbook',
+    items: [
+      { label: 'Pattern Cookbook', href: '/docs/cookbook' },
+    ],
+  },
+  {
+    category: 'Production & Internals',
+    items: [
+      { label: 'Multi-Party Patterns', href: '/docs/multi-party-patterns' },
+      { label: 'Privacy & Reads', href: '/docs/privacy-and-reads' },
+      { label: 'Events', href: '/docs/events' },
+      { label: 'Observability', href: '/docs/observability' },
+      { label: 'Performance', href: '/docs/performance' },
+      { label: 'Production Checklist', href: '/docs/production-checklist' },
     ],
   },
 ];
@@ -103,12 +135,22 @@ interface SearchEntry {
 
 const SEARCH_INDEX: SearchEntry[] = [
   // Overview
-  { title: 'Introduction', href: '/docs/introduction', keywords: ['overview', 'what is', 'features', 'getting started', 'partylayer'] },
+  { title: 'Introduction', href: '/docs', keywords: ['overview', 'what is', 'features', 'getting started', 'partylayer'] },
   { title: 'Installation', href: '/docs/installation', keywords: ['install', 'npm', 'pnpm', 'yarn', 'setup', 'peer dependencies', 'package'] },
-  { title: 'Quick Start', href: '/docs/quick-start', keywords: ['quickstart', 'tutorial', 'hello world', 'first app', 'setup'] },
+  { title: 'Migration', href: '/docs/migration', keywords: ['upgrade', 'v1', 'v2', 'v3', 'session', 'cip-0103', 'doctor'] },
+  { title: 'AI Integration', href: '/docs/ai-integration', keywords: ['ai', 'coding assistant', 'skill', 'llms', 'chatgpt', 'codex'] },
+  { title: 'Quick Start', href: '/docs/quick-start', keywords: ['quickstart', 'tutorial', 'hello world', 'first app', 'setup', 'one command'] },
+  { title: 'Create a new app', section: 'Quick Start', href: '/docs/quick-start#new-app', keywords: ['cli', 'npm create', 'starter', 'vite', 'next'] },
+  { title: 'Configure wallets', section: 'Quick Start', href: '/docs/quick-start#wallet-config', keywords: ['vala', 'send', 'walletconnect', 'bron', 'beta', 'mainnet'] },
+
+  { title: 'RainbowKit for Canton', href: '/docs/rainbowkit-for-canton', keywords: ['rainbowkit', 'react wallet', 'connect wallet', 'ethereum', 'migration'] },
+  { title: 'Integration Support', href: '/docs/integration-support', keywords: ['help', 'support', 'integration', 'reproduction', 'showcase', 'wallet provider'] },
 
   // Components
   { title: 'PartyLayerKit', href: '/docs/partylayer-kit', keywords: ['kit', 'provider', 'wrapper', 'zero-config', 'component'] },
+  { title: 'Authentication', href: '/docs/authentication', keywords: ['login', 'sign in', 'nonce', 'session', 'signature', 'replay', 'logout'] },
+  { title: 'Transaction Lifecycle', href: '/docs/transaction-lifecycle', keywords: ['send', 'swap', 'confirmation', 'recent transactions', 'unknown', 'retry'] },
+  { title: 'Swap Integration', href: '/docs/swaps', keywords: ['swap', 'quote', 'settlement', 'refund', 'oneswap', 'deposit', 'dvp'] },
   { title: 'Props', section: 'PartyLayerKit', href: '/docs/partylayer-kit#props', keywords: ['network', 'appName', 'adapters', 'theme', 'walletIcons'] },
   { title: 'ConnectButton', href: '/docs/connect-button', keywords: ['button', 'connect', 'wallet', 'component', 'UI'] },
   { title: 'Button States', section: 'ConnectButton', href: '/docs/connect-button#states', keywords: ['disconnected', 'connecting', 'connected', 'dropdown'] },
@@ -154,14 +196,31 @@ const SEARCH_INDEX: SearchEntry[] = [
   { title: 'Custom Adapter', section: 'Wallets & Adapters', href: '/docs/wallets#custom-adapter', keywords: ['custom', 'adapter', 'WalletAdapter', 'interface', 'implement'] },
   { title: 'WalletAdapter Interface', section: 'Wallets & Adapters', href: '/docs/wallets#adapter-interface', keywords: ['interface', 'detectInstalled', 'connect', 'signMessage', 'ledgerApi'] },
   { title: 'getBuiltinAdapters', section: 'Wallets & Adapters', href: '/docs/wallets#builtin-adapters-function', keywords: ['builtin', 'adapters', 'default', 'ConsoleAdapter'] },
+  { title: 'Send Wallet', href: '/docs/wallets/send', keywords: ['send', 'sigilry', 'passkey', 'webauthn', 'cantonwallet', 'beta', 'mainnet'] },
+  { title: 'How Send Differs', section: 'Send', href: '/docs/wallets/send#how-send-differs', keywords: ['send', 'differences', 'kernel.id', 'passkey', 'webauthn-prf'] },
+  { title: 'Send Connection Flow', section: 'Send', href: '/docs/wallets/send#connection-flow', keywords: ['send', 'connect', 'passkey', 'touch id', 'face id'] },
+  { title: 'Send Token Transfers', section: 'Send', href: '/docs/wallets/send#token-transfers', keywords: ['send', 'transfer', 'cip-56', 'prepareExecuteAndWait', 'TransferFactory'] },
+  { title: 'Send Troubleshooting', section: 'Send', href: '/docs/wallets/send#troubleshooting', keywords: ['send', 'troubleshoot', 'kernel.id mismatch', 'auth failed', 'oauth'] },
 
   // CIP-0103
   { title: 'CIP-0103 Provider', href: '/docs/cip-0103', keywords: ['cip-0103', 'canton', 'standard', 'provider', 'dApp'] },
+  { title: 'wagmi for Canton', href: '/docs/wagmi-for-canton', keywords: ['wagmi', 'evm', 'ethereum', 'migrate', 'port', 'useConnection', 'useReadContract'] },
   { title: 'Provider Methods', section: 'CIP-0103', href: '/docs/cip-0103#methods', keywords: ['request', 'connect', 'listAccounts', 'getPrimaryAccount', 'signMessage', 'prepareExecute', 'ledgerApi'] },
   { title: 'Provider Events', section: 'CIP-0103', href: '/docs/cip-0103#events', keywords: ['statusChanged', 'accountsChanged', 'txChanged', 'connected'] },
   { title: 'asProvider() Bridge', section: 'CIP-0103', href: '/docs/cip-0103#bridge', keywords: ['bridge', 'asProvider', 'PartyLayerClient', 'wrapper'] },
   { title: 'discoverInjectedProviders', section: 'CIP-0103', href: '/docs/cip-0103#discovery', keywords: ['discover', 'injected', 'window.canton', 'native'] },
   { title: 'ProviderRpcError', section: 'CIP-0103', href: '/docs/cip-0103#errors', keywords: ['error', 'RPC', 'EIP-1193', 'code', 'ProviderRpcError'] },
+
+  // Generic Bridge
+  { title: 'Generic Bridge', href: '/docs/generic-bridge', keywords: ['generic bridge', 'adapterless', 'announce', 'cip-0103', 'wallet integration', 'canton:announceProvider', 'browser:ext'] },
+  { title: 'Announce handshake', section: 'Generic Bridge', href: '/docs/generic-bridge#announce-handshake', keywords: ['announce', 'requestProvider', 'announceProvider', 'EIP-6963', 'discovery', 'AnnouncedWallet', 'target'] },
+  { title: 'For wallets: zero adapter code', section: 'Generic Bridge', href: '/docs/generic-bridge#for-wallets', keywords: ['wallet', 'adapterless', 'connect', 'signMessage', 'prepareExecute', 'baseline', 'capabilities'] },
+  { title: 'Capability mapping', section: 'Generic Bridge', href: '/docs/generic-bridge#capability-mapping', keywords: ['capability', 'mapping', 'ledgerApi', 'restore', 'events', 'submitTransaction'] },
+  { title: 'For dApps: connect to any CIP-0103 wallet', section: 'Generic Bridge', href: '/docs/generic-bridge#for-dapps', keywords: ['dapp', 'createPartyLayer', 'connect', 'capabilitiesSnapshot', 'ConnectButton', 'PartyLayerKit'] },
+
+  // Guides
+  { title: 'Dev & Staging', section: 'Guides', href: '/docs/dev-and-staging', keywords: ['dev', 'staging', 'production', 'devnet', 'testnet', 'mainnet', 'mock', 'testing', 'studio', 'onboarding', 'getting started', 'integration'] },
+  { title: 'Canton Topology', section: 'Guides', href: '/docs/partylayer-and-canton-topology', keywords: ['dar', 'validator', 'vetting', 'topology', 'participant', 'ledger', 'bridge', 'daml', 'package', 'signatory', 'observer', 'stakeholder'] },
 
   // Error Handling
   { title: 'Error Handling', href: '/docs/error-handling', keywords: ['error', 'catch', 'try', 'handling', 'PartyLayerError'] },
@@ -187,6 +246,26 @@ const SEARCH_INDEX: SearchEntry[] = [
   { title: 'Registry Internals', section: 'Advanced', href: '/docs/advanced#registry', keywords: ['registry', 'signed', 'manifest', 'cache', 'verification', 'fallback'] },
   { title: 'Security', section: 'Advanced', href: '/docs/advanced#security', keywords: ['security', 'CSP', 'origin', 'transport', 'encryption'] },
   { title: 'Production Checklist', section: 'Advanced', href: '/docs/advanced#production-checklist', keywords: ['production', 'checklist', 'deploy', 'best practices'] },
+
+  // Cookbook
+  { title: 'Pattern Cookbook', href: '/docs/cookbook', keywords: ['cookbook', 'patterns', 'recipes', 'examples', 'runnable', 'studio', 'when not to use'] },
+  { title: 'Connect a wallet', section: 'Cookbook', href: '/docs/cookbook#connect-a-wallet', keywords: ['connect', 'useConnect', 'useWallets', 'recipe', 'studio'] },
+  { title: 'Sign a message', section: 'Cookbook', href: '/docs/cookbook#sign-a-message', keywords: ['sign', 'useSignMessage', 'signature', 'recipe', 'studio'] },
+  { title: 'Submit a transaction', section: 'Cookbook', href: '/docs/cookbook#submit-a-transaction', keywords: ['submit', 'useSubmitTransaction', 'transaction', 'lifecycle', 'recipe', 'studio'] },
+  { title: 'Reconnect a session', section: 'Cookbook', href: '/docs/cookbook#reconnect-a-session', keywords: ['reconnect', 'restore', 'useSession', 'resilience', 'rehydrate', 'recipe', 'studio'] },
+  { title: 'Terminal disconnect', section: 'Cookbook', href: '/docs/cookbook#terminal-disconnect', keywords: ['disconnect', 'useSession', 'terminal', 'sign out', 'recipe', 'studio'] },
+  { title: 'PartyLayer + React Query', section: 'Cookbook', href: '/docs/cookbook#react-query', keywords: ['react query', 'tanstack', 'useQuery', 'useMutation', 'wagmi', 'recipe', 'studio'] },
+  { title: 'Multi-framework (React / Vue / Vanilla)', section: 'Cookbook', href: '/docs/cookbook#multi-framework', keywords: ['vue', 'vanilla', 'react', 'framework', 'createPartyLayerSession', 'recipe', 'studio'] },
+  { title: 'Error handling', section: 'Cookbook', href: '/docs/cookbook#error-handling', keywords: ['error', 'UserRejectedError', 'reset', 'PartyLayerError', 'recipe', 'studio'] },
+  { title: 'Capability gating', section: 'Cookbook', href: '/docs/cookbook#capability-gating', keywords: ['capability', 'CapabilityNotSupportedError', 'gating', 'submit', 'recipe', 'studio'] },
+
+  // Production & Internals
+  { title: 'Multi-Party Patterns', section: 'Production & Internals', href: '/docs/multi-party-patterns', keywords: ['multi-party', 'transfer', 'allocation', 'dvp', 'settlement', 'atomic', 'offer', 'accept', 'confirmer'] },
+  { title: 'Privacy & Reads', section: 'Production & Internals', href: '/docs/privacy-and-reads', keywords: ['privacy', 'witness', 'acs', 'interface view', 'disclosure', 'reads', 'party-scoped'] },
+  { title: 'Event Spec', section: 'Production & Internals', href: '/docs/events', keywords: ['events', 'event spec', 'PartyLayerEvent', 'tx:status', 'session:connected', 'telemetry', 'correlation'] },
+  { title: 'Observability', section: 'Production & Internals', href: '/docs/observability', keywords: ['observability', 'telemetry', 'opentelemetry', 'sentry', 'datadog', 'metrics', 'logging', 'adapter'] },
+  { title: 'Performance', section: 'Production & Internals', href: '/docs/performance', keywords: ['performance', 'bundle size', 'tree shaking', 'size-limit', 'lazy loading', 'caching', 'sideEffects'] },
+  { title: 'Production Checklist', section: 'Production & Internals', href: '/docs/production-checklist', keywords: ['production', 'migration', 'checklist', 'devnet', 'testnet', 'mainnet', 'ssr', 'failover', 'deploy'] },
 ];
 
 function searchDocs(query: string): SearchEntry[] {
@@ -252,6 +331,14 @@ export default function DocsLayout({ children }: { children: ReactNode }) {
   const router = useRouter();
   const [mobileOpen, setMobileOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
+  // Platform shortcut marker — start with 'Ctrl+' so SSR and first client render
+  // match, then upgrade to '⌘' on Mac after mount. Prevents React hydration #425.
+  const [shortcutPrefix, setShortcutPrefix] = useState<'⌘' | 'Ctrl+'>('Ctrl+');
+  useEffect(() => {
+    if (typeof navigator !== 'undefined' && /Mac/i.test(navigator.userAgent)) {
+      setShortcutPrefix('⌘');
+    }
+  }, []);
 
   /* Cmd+K / Ctrl+K shortcut */
   useEffect(() => {
@@ -454,12 +541,15 @@ export default function DocsLayout({ children }: { children: ReactNode }) {
           borderBottom: `1px solid ${t.border}`, height: 56,
         }}>
           <div style={{
-            maxWidth: 1200, margin: '0 auto', padding: '0 24px',
+            maxWidth: 1200, margin: '0 auto', padding: responsive(bp, '0 16px', '0 24px', '0 24px'),
             height: 56, display: 'flex', alignItems: 'center', justifyContent: 'space-between',
           }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
               {/* Mobile hamburger */}
               <button
+                aria-label="Toggle documentation navigation"
+                aria-expanded={mobileOpen}
+                aria-controls="docs-navigation"
                 onClick={() => setMobileOpen(o => !o)}
                 style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 4 }}
                 className="docs-mobile-toggle"
@@ -473,11 +563,12 @@ export default function DocsLayout({ children }: { children: ReactNode }) {
                 <img src="/partylayer.xyz.svg" alt="PartyLayer" draggable={false}
                   style={{ height: bp === 'mobile' ? 72 : 96, marginTop: bp === 'mobile' ? -25 : -35, marginBottom: bp === 'mobile' ? -25 : -35, marginLeft: bp === 'mobile' ? -7 : -9 }} />
               </Link>
-              <span style={{ fontSize: 13, fontWeight: 500, color: t.slate400, padding: '3px 8px', background: t.muted, borderRadius: 6 }}>Docs</span>
+              <span className="docs-section-label" style={{ fontSize: 13, fontWeight: 500, color: t.slate400, padding: '3px 8px', background: t.muted, borderRadius: 6 }}>Docs</span>
             </div>
 
             {/* Search button */}
             <button
+              aria-label={bp === 'desktop' ? undefined : 'Search documentation'}
               onClick={() => setSearchOpen(true)}
               className="docs-search-btn"
               style={{
@@ -494,20 +585,20 @@ export default function DocsLayout({ children }: { children: ReactNode }) {
                 <circle cx="11" cy="11" r="8" /><path d="m21 21-4.35-4.35" strokeLinecap="round" />
               </svg>
               <span style={{ fontSize: 13, color: t.slate400, fontFamily: t.font, flex: 1, textAlign: 'left', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                Search docs...
+                Search documentation
               </span>
               <kbd style={{
                 fontSize: 11, fontFamily: t.mono, color: t.slate400,
                 padding: '2px 6px', borderRadius: 4, border: `1px solid ${t.border}`,
                 background: t.bg, lineHeight: 1, flexShrink: 0,
               }}>
-                {typeof navigator !== 'undefined' && /Mac/i.test(navigator.userAgent) ? '⌘' : 'Ctrl+'}K
+                {shortcutPrefix}K
               </kbd>
             </button>
 
             <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-              <a href="https://github.com/PartyLayer/PartyLayer" target="_blank" rel="noopener noreferrer"
-                style={{ color: t.slate500, display: 'flex', alignItems: 'center' }}
+              <a href="https://github.com/PartyLayer/PartyLayer" aria-label="PartyLayer on GitHub" target="_blank" rel="noopener noreferrer"
+                style={{ color: t.slate500, display: 'flex', alignItems: 'center', padding: 4 }}
               >
                 <svg width={20} height={20} viewBox="0 0 24 24" fill="currentColor">
                   <path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/>
@@ -520,7 +611,7 @@ export default function DocsLayout({ children }: { children: ReactNode }) {
                   background: t.brand500, transition: `all 150ms ${t.ease}`,
                   display: bp === 'mobile' ? 'none' : undefined,
                 }}
-                onMouseOver={e => { e.currentTarget.style.background = t.brand600; }}
+                onMouseOver={e => { e.currentTarget.style.background = t.brand100; }}
                 onMouseOut={e => { e.currentTarget.style.background = t.brand500; }}
               >
                 Try Demo
@@ -532,6 +623,7 @@ export default function DocsLayout({ children }: { children: ReactNode }) {
         <div style={{ display: 'flex', flex: 1, maxWidth: 1200, margin: '0 auto', width: '100%' }}>
           {/* Sidebar */}
           <aside
+            id="docs-navigation"
             className={`docs-sidebar${mobileOpen ? ' docs-sidebar-open' : ''}`}
             style={{
               width: d.sidebarWidth, flexShrink: 0,
@@ -587,7 +679,7 @@ export default function DocsLayout({ children }: { children: ReactNode }) {
 
           {/* Main content */}
           <main style={{
-            flex: 1, maxWidth: d.contentMaxWidth,
+            flex: 1, minWidth: 0, maxWidth: d.contentMaxWidth,
             padding: responsive(bp, '24px 16px 48px', '32px 32px 64px', '40px 48px 80px'),
             minHeight: 'calc(100vh - 56px)',
           }}>
@@ -618,7 +710,8 @@ export default function DocsLayout({ children }: { children: ReactNode }) {
       {/* Mobile sidebar styles + responsive tweaks */}
       <style>{`
         .docs-mobile-toggle { display: none !important; }
-        @media (max-width: 868px) {
+        @media (max-width: 480px) { .docs-section-label { display: none !important; } }
+        @media (max-width: 1024px) {
           .docs-mobile-toggle { display: block !important; }
           .docs-search-btn { flex: 0 1 40px !important; overflow: hidden !important; }
           .docs-search-btn span, .docs-search-btn kbd { display: none !important; }
@@ -662,12 +755,12 @@ function CodeBlockComponent({ language, title, children }: { language?: string; 
           display: 'flex', justifyContent: 'space-between', alignItems: 'center',
           padding: responsive(cbBp, '8px 12px', '8px 16px', '8px 16px'), background: '#0F172A', borderBottom: '1px solid rgba(148,163,184,0.15)',
         }}>
-          <span style={{ fontSize: 12, fontWeight: 500, color: t.slate400, fontFamily: t.font }}>
+          <span style={{ fontSize: 12, fontWeight: 500, color: t.codeMuted, fontFamily: t.font }}>
             {title || language}
           </span>
           <button onClick={handleCopy} style={{
             background: 'none', border: 'none', cursor: 'pointer',
-            color: copied ? '#34D399' : t.slate400, fontSize: 12, fontFamily: t.font,
+            color: copied ? '#34D399' : t.codeMuted, fontSize: 12, fontFamily: t.font,
             display: 'flex', alignItems: 'center', gap: 4, padding: '2px 6px', borderRadius: 4,
             transition: `color 150ms ${t.ease}`,
           }}>
@@ -685,7 +778,7 @@ function CodeBlockComponent({ language, title, children }: { language?: string; 
           </button>
         </div>
       )}
-      <pre style={{
+      <pre tabIndex={0} style={{
         margin: 0, padding: responsive(cbBp, '12px 14px', '14px 16px', '14px 16px'), background: d.codeBg,
         overflowX: 'auto', fontSize: responsive(cbBp, 12, 13, 13.5), lineHeight: 1.6,
         fontFamily: t.mono, color: d.codeFg,

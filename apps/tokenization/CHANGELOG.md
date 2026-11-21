@@ -1,0 +1,80 @@
+# partylayer-tokenization
+
+## 0.0.8
+
+### Patch Changes
+
+- Updated dependencies [6163ee3]
+- Updated dependencies [645285d]
+  - @partylayer/sdk@0.22.0
+  - @partylayer/react@3.4.0
+
+## 0.0.7
+
+### Patch Changes
+
+- Updated dependencies [64ac2e1]
+- Updated dependencies [64ac2e1]
+  - @partylayer/sdk@0.21.0
+  - @partylayer/react@3.2.0
+
+## 0.0.6
+
+### Patch Changes
+
+- Updated dependencies [2e07185]
+- Updated dependencies
+- Updated dependencies [0ebd598]
+- Updated dependencies [8cb0f09]
+- Updated dependencies [2e07185]
+- Updated dependencies [86f1a7d]
+  - @partylayer/sdk@0.20.0
+  - @partylayer/react@3.1.0
+
+## 0.0.5
+
+### Patch Changes
+
+- Updated dependencies [9e8ca31]
+- Updated dependencies [18e7e42]
+- Updated dependencies [2eee6b1]
+- Updated dependencies [fbda51f]
+  - @partylayer/sdk@0.19.0
+  - @partylayer/react@3.0.0
+  - @partylayer/demo-adapters@0.0.1
+
+## 0.0.4
+
+### Patch Changes
+
+- Updated dependencies [2646186]
+  - @partylayer/adapter-cantor8@0.4.0
+  - @partylayer/sdk@0.18.1
+
+## 0.0.3
+
+### Patch Changes
+
+- Updated dependencies [4fb8c0f]
+  - @partylayer/sdk@0.18.0
+  - @partylayer/react@2.3.3
+
+## 0.0.2
+
+### Patch Changes
+
+- Updated dependencies
+- Updated dependencies
+  - @partylayer/sdk@0.17.0
+  - @partylayer/react@2.3.1
+  - @partylayer/adapter-console@0.3.17
+
+## 0.0.1
+
+### Patch Changes
+
+- Updated dependencies
+- Updated dependencies [d132cf3]
+  - @partylayer/react@2.3.0
+  - @partylayer/sdk@0.16.0
+  - @partylayer/adapter-console@0.3.16

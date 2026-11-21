@@ -1,0 +1,28 @@
+{
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js"
+    },
+    "./pinia": {
+      "types": "./dist/pinia.d.ts",
+      "import": "./dist/pinia.mjs",
+      "require": "./dist/pinia.js"
+    }
+  },
+  "main": "./dist/index.js",
+  "module": "./dist/index.mjs",
+  "name": "@partylayer/vue",
+  "peerDependencies": {
+    "@tanstack/vue-query": ">=5",
+    "pinia": ">=2",
+    "vue": ">=3.4.0"
+  },
+  "peerDependenciesMeta": {
+    "pinia": {
+      "optional": true
+    }
+  },
+  "types": "./dist/index.d.ts"
+}

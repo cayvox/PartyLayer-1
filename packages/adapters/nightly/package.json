@@ -1,6 +1,7 @@
 {
   "name": "@partylayer/adapter-nightly",
-  "version": "0.2.4",
+  "version": "0.3.3",
+  "sideEffects": false,
   "description": "Nightly Wallet adapter for PartyLayer",
   "main": "./dist/index.js",
   "module": "./dist/index.mjs",
@@ -20,7 +21,7 @@
     "clean": "rm -rf dist",
     "lint": "eslint src --ext .ts",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run --passWithNoTests"
   },
   "keywords": [
     "canton",
@@ -39,7 +40,7 @@
     "url": "https://github.com/PartyLayer/PartyLayer/issues"
   },
   "dependencies": {
-    "@partylayer/core": "workspace:*"
+    "@partylayer/core": "workspace:^"
   },
   "devDependencies": {
     "@types/node": "^20.11.0",

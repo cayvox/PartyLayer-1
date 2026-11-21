@@ -1,4 +1,997 @@
-# @cantonconnect/sdk
+# @partylayer/sdk
+
+## 0.22.1
+
+### Patch Changes
+
+- Require secure randomness for session IDs before wallet connection, with an optional platform-backed native crypto hook. Reject unavailable or failed AES-GCM instead of falling back to plain base64; preserve valid encrypted caches and prevent stale restore failures from clearing a newer session. Keep the OneSwap hosted profile behind a real package-private dynamic import.
+- 727c1b3: Bundle PartyLayer's own native client implementation into React Native so native installations no longer pull the browser SDK or wallet vendor dependency graph. Keep AsyncStorage 2.x supported, expose the bundled constructor, and accept external SDK clients through a structural public client interface. Preserve React Native Web's browser factory through the browser export condition and explicit `/web` entry with an optional SDK peer; web applications install the SDK explicitly. Separate shared SDK configuration types from browser-only wallet configuration so native declarations remain self-contained.
+- d47df49: Replace OneSwap's runtime peer on an older core with the existing discovery owner and an independently implemented hosted-popup profile. Preserve supported protocol behavior while isolating each channel's popup and cryptographic request IDs. Uncertain dispatched writes are never replayed or labeled failed without evidence.
+- d47df49: Add a native-safe entry sharing the client implementation while preserving browser defaults. Native applications supply platform-compatible transports; browser-only automatic configuration fails explicitly.
+
+## 0.22.0
+
+### Minor Changes
+
+- 6163ee3: Add account-aware HoldingV2 reads alongside unchanged V1 APIs, typed V2 transfer
+  records and actor-group eligibility, exact account-separated balances and a
+  server-allowlisted V1/V2 application participant read preset.
+
+  Complete the explicitly configured legacy OAuth callback path with same-origin
+  popup/state/PKCE checks, cancellation and validated token responses. Browser
+  client secrets and non-PKCE browser authorization are rejected. Vendor endpoint
+  contracts and live wallet acceptance remain independently validated.
+
+  Remove an unnecessary dynamic core-module import from the initial SDK bundle
+  without changing origin-allowlist enforcement.
+
+### Patch Changes
+
+- Validate `asProvider()` request envelopes and parameter shapes before session
+  lookup or wallet routing, returning numeric CIP-0103 request errors.
+
+- Updated dependencies [6163ee3]
+  - @partylayer/core@0.16.0
+  - @partylayer/adapter-bron@0.7.0
+  - @partylayer/adapter-cantor8@0.5.3
+  - @partylayer/adapter-console@0.5.2
+  - @partylayer/adapter-loop@0.6.3
+  - @partylayer/adapter-nightly@0.3.3
+  - @partylayer/adapter-send@1.2.11
+  - @partylayer/adapter-walletconnect@0.5.2
+  - @partylayer/provider@0.6.2
+  - @partylayer/registry-client@0.7.2
+
+## 0.21.0
+
+### Minor Changes
+
+- 64ac2e1: Add authorized, identity-scoped CIP-0103 JSON Ledger API holdings reads and independent update/command correlation. Add the ready React holdings hook and an opt-in pending transaction journal that restores unknown outcomes without replaying writes. Preserve existing hooks and default memory-only behavior; expose optional registry trust roots through PartyLayerKit.
+
+### Patch Changes
+
+- 64ac2e1: Update official discovery, Cantor8 and WalletConnect runtime dependencies after compatibility validation. Retain the separate pinned Canton SDK required by Walley's peer contract. The Devnet demonstration resolves complete registry asset capabilities with the upstream wallet SDK instead of constructing a stale AssetBody shape.
+- Updated dependencies [64ac2e1]
+- Updated dependencies [64ac2e1]
+  - @partylayer/registry-client@0.7.1
+  - @partylayer/adapter-cantor8@0.5.2
+  - @partylayer/adapter-walletconnect@0.5.1
+
+## 0.20.1
+
+### Patch Changes
+
+- ea0de53: Describe Canton Network wallet integration, CIP-0103 support and framework-specific entry points in npm metadata. Link packages to the relevant setup guides and improve discovery with relevant keywords. Runtime APIs and wallet capability contracts are unchanged.
+
+## 0.20.0
+
+- Align README and website onboarding around one installation, included wallet runtimes,
+  explicit network/configuration prerequisites and the default branded connection UI.
+
+- Reject contradictory command IDs in normalized execution receipts and native
+  provider execution results without resubmitting. Cover the published Vala
+  runtime with controlled HTTP/popup integration tests; reconcile unknown outcomes.
+
+- Bound native disconnect acknowledgement to ten seconds, clear the local session
+  on timeout and prevent a late vendor reply from clearing a newer connection.
+
+- Isolate generic wrapper state when an application reuses an adapter configuration
+  across SDK clients; a second client can no longer replace the first native owner.
+
+- Recheck live native identity after message approval, so a bare signature is not
+  attributed to an old primary party after an eventless account change.
+
+- Use official discovery 1.15.0 as the browser-native connection owner, with
+  constrained cache migration, guarded identity changes and stable native account,
+  event and raw Ledger API passthrough. Legacy native caches require one reconnect.
+  Keep proprietary/custom compatibility contracts and Console signing encoding.
+  Add render-safe deferred initialization and installed-runtime integration tests.
+
+- Preserve actual ledger completion offsets and reject explicitly malformed or
+  mismatched message/party echoes in signature responses. The provider bridge
+  supports combined-only wallets without inventing signature/ledger event data.
+
+- Supply the dApp SDK 0.24.0 peer required by Walley 1.2.0 explicitly, separately
+  from WalletConnect's reviewed 1.8.0 runtime. Default consumers do not need to
+  install or resolve that compatibility dependency themselves.
+
+- Reject explicit negative CIP-0103 connection responses and empty primary-party
+  results, even when the wallet still has cached account metadata.
+
+- Reject restoration when the live primary party or recognized network differs
+  from the saved session, including official-provider and legacy/custom paths.
+  Respect explicit disconnected status instead of reviving a cached account.
+
+- Coalesce restoration and invalidate stale restore/connection results when a
+  newer connection, disconnect or destroy supersedes them. Serialize persistence
+  so an old async save/logout cannot overwrite a new session. Keep popup opening
+  synchronous on pre-warmed connections.
+
+- Complete generic message-signature results, reject invalid signatures/account changes,
+  unwrap the SDK transaction envelope into CIP-0103 command parameters, and normalize
+  receipts without inventing ledger identifiers.
+
+### Minor Changes
+
+- Normalize message signatures at the public SDK boundary for custom and legacy
+  adapters as well as CIP-0103 providers. Reject empty, malformed or mismatched
+  results instead of reporting successful signing.
+
+- Include the reviewed, pinned Walley, Cauri, OneSwap and Vala official SDKs in the existing SDK with lazy loading through the generic CIP-0103 bridge. React and generated projects use the same default catalog without wallet-specific imports or installation. WalletConnect and Bron use shared application configuration; custom adapters can replace or extend defaults.
+
+  Filter wallets by the configured network and channel, align discovery capabilities with implemented methods, warm popup connections before returning the picker list, and validate restored official providers instead of reviving expired sessions. Vala remains Devnet beta.
+
+- 0ebd598: Stop reporting wallets as installed when nothing was installed.
+
+  `detectInstalled()` could only answer yes or no, and eight of twelve adapters had
+  no honest way to answer it — a QR wallet, a hosted popup, a relay and an OAuth
+  service have no local artefact to probe. They answered `true`, meaning
+  "reachable", and the picker read it as "installed". Cantor8 is not an extension
+  at all: its tile said installed, and clicking it opened a tab.
+
+  `AdapterDetectResult` gains `availability`, which says what presence actually is:
+  `installed`, `not-installed` (probed and absent, with an install URL),
+  `no-local-install` (QR / popup / relay — nothing to probe), or `unknown` (the
+  probe failed or timed out, which is not proof of absence). `installed` is
+  deprecated in its JSDoc, still populated, and exactly
+  `availability.kind === 'installed'`, so no consumer breaks.
+
+  **The false `true` was load-bearing.** `installGuard` read `installed` and threw
+  `WalletNotInstalledError` on false — so returning the truth would have blocked
+  connect for every wallet that has nothing to install. Making the adapters honest
+  broke connect for all of them until the guard was changed to ask its real
+  question: not "is it installed" but "do we already know this cannot work", which
+  only `not-installed` answers yes to. That coupling is why this is one contract
+  change rather than eight independent bug fixes.
+
+  Vendor `detect()` is no longer called for `discovery-adapter` wallets. All three
+  implementations are constants (`walley`: `window.open` exists; `cauri`:
+  `Promise.resolve(true)`; `oneswap`: `typeof window !== 'undefined'`), so awaiting
+  them bought no information while adding an async hop to the picker's render path
+  and a dependency on three third parties answering honestly. A `discovery-adapter`
+  transport IS the answer; the rule is applied in exactly one place.
+
+  The picker's subtitles for the two wallets measured causing real harm now say
+  what a click will do: "Scan to connect — nothing to install" and "Opens in a
+  popup — nothing to install".
+
+  `docs/adapters.md` records which adapters probe what, and one mismatch still
+  outstanding: Cantor8 classifies as `scan` but opens a tab, a registry-data fix
+  queued with the D5/D6 registry work.
+
+- 8cb0f09: Report what the wallet actually said, and hold the connect deadline you set.
+
+  Two defects in one place. `mapUnknownErrorToPartyLayerError` classified errors by
+  scanning their prose, and both the refusal branch and the timeout branch drew the
+  wrong conclusion from it.
+
+  **A wallet refusing is no longer reported as the user cancelling.** Any message
+  containing `rejected`, `denied`, `cancelled` or `canceled` collapsed into
+  `USER_REJECTED`. Nightly declining because the tab was unfocused — "Connect
+  request rejected - tab is not active" — told the dApp the user had clicked
+  cancel, when no prompt had been shown at all. Classification now prefers
+  structured signals (EIP-1193 `4001`, `err.name`), then phrasing that names the
+  user; anything else that reads as a refusal becomes the new `WALLET_REFUSED`
+  code, carrying the wallet's own words in `message` and `details.originalMessage`.
+
+  **A timeout now reports the deadline that actually elapsed.** `context.timeoutMs`
+  took precedence over the figure already present in the message, so a connect that
+  ran the full two minutes was reported as "timed out after 30000ms" — the SDK held
+  two independent defaults, `120000` at the race and `30000` in the catch block that
+  formatted the error. There is now one exported `DEFAULT_CONNECT_TIMEOUT_MS`, the
+  message's own number wins over context, and an unknown deadline says "timed out"
+  rather than inventing "after 0ms".
+
+  **A timeout now cancels.** `Promise.race` never stopped the loser, so a connect
+  that had timed out kept its popup, QR overlay or socket live and could still
+  complete against a caller that had given up. `connect()` receives an
+  `AbortSignal` that fires when the deadline does. Adapters that ignore it behave
+  exactly as before.
+
+  The Nightly adapter had the same shape internally: its protocol names the
+  outcome (`sign_request_rejected`) and it degraded that to prose for the mapper to
+  recognise, with a comment noting the word "rejected" was load-bearing. All three
+  sites now throw the typed error where the type is known, so a Nightly decline no
+  longer depends on string matching to be classified correctly.
+
+  `WALLET_REFUSED` is additive. Code branching on `USER_REJECTED` for a genuine
+  cancellation is unaffected; code that was relying on `USER_REJECTED` to catch
+  wallet-side refusals should now also handle `WALLET_REFUSED`.
+
+### Patch Changes
+
+- 2e07185: Give the registry a field for how a wallet connects, and four capabilities it could not express.
+
+  One overloaded signal was answering three independent questions: how a wallet is
+  DISCOVERED, how its SDK is LOADED, and how it CONNECTS. `installation.scriptTag`
+  says how the SDK is loaded, and it was read as "scan" — which is right for Loop
+  and wrong for Cantor8, script-loaded but opening a popup.
+
+  `connect: ('injected' | 'popup' | 'relay')[]` is now its own field. The shapes
+  came from surveying all ten wallets rather than from the one that prompted it,
+  and that ordering paid: Loop and WalletConnect are BOTH `relay` — a QR scanned by
+  a phone app and a mobile pairing — so a popup-versus-scan flag would have been
+  wrong for two wallets on day one. Their shared subtitle reads "Connect from
+  another device", because the axis is where the connection happens, not what the
+  UI looks like.
+
+  ORDER IS PREFERENCE ORDER, and it has a reader: `connect[0]` is what the picker
+  tries first, and `preferInstalled: false` — the modal's "Try mobile" affordance —
+  advances to the next entry. Console is `['injected', 'relay']`. That preference
+  already exists; it is hardcoded in Console's adapter today, and this is where it
+  belongs instead.
+
+  `transfer`, `ledgerApi`, `popup` and `restore` are now expressible.
+  `walletInfo.capabilities` could never contain them, so
+  `listWallets({ requiredCapabilities: ['transfer'] })` matched zero wallets while
+  every adapter implemented `requestTransfer` — two capability gates reading
+  contradictory sources.
+
+  Also fixed: `installHints.deepLinkScheme` was populated from
+  `installation.scriptTag`, putting an npm package name in a field meaning
+  `loop://`, while `installation.deeplink` was never mapped at all. Both halves
+  corrected. Nothing read the field, so it was inert — wrong value, right value
+  dropped, and it would have shipped broken the day something read it.
+
+  No registry entries change here. The data follows once this is published, so no
+  client sees entries declaring a schema it does not understand.
+
+- 2e07185: Stop listing a known wallet twice in the picker.
+
+  A wallet the picker already knows could be minted a SECOND row beside its own,
+  in two shapes:
+
+  - an INJECTED provider that resolves a known identity — observed on the demo
+    surface, where the demo's own test wallet was listed twice and the twin
+    connected to the same provider when clicked;
+  - an ANNOUNCE carrying a known registry id — the shape reported for Nightly.
+
+  The second is SURFACE-DEPENDENT: the trigger is dispatching
+  `canton:requestProvider`, which is ordinary announce discovery. Most dApps do it;
+  our kit demo happens not to, which is the only reason it showed one row there.
+  That is why "it does not reproduce" was the wrong conclusion.
+
+  NIGHTLY ANNOUNCES, observed on a real browser with the extension installed:
+  `{ id: 'nightly', name: 'Nightly', target: 'nightly', icon: … }`. It does BOTH —
+  speaks its non-CIP-0103 callback protocol AND announces — which is why an earlier
+  survey that classified it by protocol concluded it does not.
+
+  Console and Send announce too and do NOT duplicate, because their registry
+  entries carry `providerDetection`. THAT IS WHAT THIS FALLBACK IS FOR: the other
+  seven wallets, whose matchers have not been observed and are therefore absent.
+
+  Both shapes are covered by a test that fails without the fix.
+
+  The identity guard was not the gap. It drops entries whose identity did NOT
+  resolve — an identity-less `window.canton` slot — and correctly lets a resolved
+  one through. The gap is the identity bridge immediately after:
+  `findMatchingWalletInfo` consults ONLY `providerDetection`, which 8 of 10
+  registry entries do not carry and a registered adapter never has. Nothing mapped
+  the provider back to the wallet already in the list, so the unknown branch minted
+  a twin.
+
+  The fallback matches a resolved provider id against the wallet id and the
+  declared injection global — IDENTITY FIELDS ONLY. Not the display name: names
+  are localisable, vendor-changeable and collidable, and two wallets both calling
+  themselves "Canton Wallet" would silently bridge to each other. That is the same
+  prose-matching removed from the error classifier, and it does not belong in the
+  identity bridge either.
+
+- 86f1a7d: Fix a TypeError in `getActiveSession()` when an in-memory session has expired.
+
+  `getActiveSession()` called `await this.disconnect()` and then read
+  `this.activeSession.sessionId` to populate the `session:expired` event.
+  `disconnect()` sets `this.activeSession` to null on success, so that read threw:
+
+  ```
+  TypeError: Cannot read properties of null (reading 'sessionId')
+    at PartyLayerClient.getActiveSession src/client.ts:1064:41
+  ```
+
+  Every caller of `getActiveSession()` inherited the throw, which includes
+  `signMessage()` and `submitTransaction()`. The session id is now captured before
+  `disconnect()` runs.
+
+  The other three `session:expired` emit sites were checked rather than assumed.
+  Two are covered by new tests and are unaffected, because each reads a local
+  variable captured before the session is cleared. The fourth, the re-probe inside
+  `listWallets`, is not driven by a test; the test file records why and what would
+  be needed to drive it.
+
+- Updated dependencies [817d357]
+- Updated dependencies [2e07185]
+- Updated dependencies [5a13fea]
+- Updated dependencies [882752f]
+- Updated dependencies [0ebd598]
+- Updated dependencies [8cb0f09]
+- Updated dependencies [b4961d2]
+- Updated dependencies [55ff8d1]
+- Updated dependencies [8e08da9]
+  - @partylayer/core@0.15.0
+  - @partylayer/registry-client@0.7.0
+  - @partylayer/adapter-console@0.4.1
+  - @partylayer/adapter-loop@0.6.0
+  - @partylayer/adapter-cantor8@0.5.0
+  - @partylayer/adapter-bron@0.6.0
+  - @partylayer/adapter-walletconnect@0.5.0
+  - @partylayer/adapter-nightly@0.3.1
+  - @partylayer/adapter-send@1.2.9
+  - @partylayer/provider@0.6.1
+
+## 0.19.0
+
+### Minor Changes
+
+- 9e8ca31: **Breaking, and one value changes meaning rather than merely appearing.**
+
+  **`transactionHash` is now optional**, so an adapter with no honest value omits it. If you read `receipt.transactionHash` or `signed.transactionHash`, you must handle `undefined`.
+
+  **On Loop, `receipt.updateId` has changed meaning.** It previously held `submission_id ?? command_id` — a submission id identifies the request, not the committed update. It now holds the Loop SDK's real `update_id`, and is **omitted when that is absent**. So a consumer reading `receipt.updateId` on Loop who previously always got a string may now get `undefined`, and the string they got before did not mean what its name said. This is a value quietly changing meaning, not a field appearing, so it will not show up as a type error at the point that matters.
+
+  **Grep your own code for `String(receipt.transactionHash)`.** Now that the field is optional, that renders the literal text `"undefined"` — it compiles, it is not a type error, and it reaches your UI looking like ordinary output. Template interpolation (`` `${receipt.transactionHash}` ``) and string concatenation do the same. Three such sites existed inside this repository and are fixed here; yours are yours to find.
+
+  ## Why this is breaking, by the rules
+
+  `docs/releasing.md` lists "Changing method signatures (parameters, return types)" as a breaking change. `TxReceipt.transactionHash` and `SignedTransaction.transactionHash` go from `TransactionHash` to `TransactionHash | undefined`, so every consumer reading them must now handle absence. It is a breaking change and is described as one here.
+
+  `@partylayer/react` (2 → 3) and `@partylayer/vue` (1 → 2) take major bumps for it. `@partylayer/core`, `@partylayer/sdk` and `@partylayer/provider` are pre-1.0 and take minor bumps: a jump to 1.0.0 would announce a stability commitment this change does not warrant, and 0.x already sets the expectation that a minor can break. Read the change, not the number.
+
+  Also optional, for the same reason and from the same source: `TxStatusUpdate.txId` (core) and `TxStatusEvent.txId` (sdk).
+
+  ## Who is affected
+
+  The compiler enumerated this, not a grep. Every site that had to change:
+
+  - `@partylayer/sdk` — the three `tx:status` emissions in `client.ts` (sign, submit, transfer)
+  - `@partylayer/provider` — `BridgeableClient`'s structural type, and the `signed` / `executed` CIP-0103 payloads
+  - `@partylayer/react` and `@partylayer/vue` — the `TransactionToast` detail line
+
+  If you read `receipt.transactionHash`, you now need to handle `undefined`. If you want a ledger identifier, prefer `receipt.updateId`: it is the ledger's own id for the committed update, and several wallets report a real one while having no hash at all.
+
+  **Watch for `String(receipt.transactionHash)`.** That pattern compiles fine and renders the literal text `"undefined"` — a new placeholder created by the very change that removed the old ones. Three such sites existed inside this repository and are fixed here; check yours.
+
+  ## The finding this comes from
+
+  **A required field with no honest value is a defect factory.**
+
+  Nine sites across five adapters manufactured a transaction hash: `tx_<now>_<random>`, `tx_<now>`, `'pending'` (three times), `''`, a command id, a signature. Not one of them was a fallback anybody designed. Every one existed because the type demanded a value the code path could not produce, and the adapter had nowhere to put nothing.
+
+  Two of the nine were found only while making this change — in our Bron adapter, which an earlier survey of this exact problem had missed because they were ternaries rather than `??` chains. That is the argument in miniature: fixing the sites one at a time finds the ones you already know how to look for, and leaving the field required guarantees the next adapter writes a tenth.
+
+  ## Also fixed here
+
+  - **`BronAdapter`** omits `transactionHash` instead of reporting the word `'pending'` as one (two sites).
+  - **`LoopAdapter`** omits it instead of reporting the command id under it. The command id is still reported as `commandId`, which is true of it. A real value under a wrong name is the same error as a fabricated one for anyone reading the field by its name.
+
+- 18e7e42: Fix `submitTransaction` on the generic CIP-0103 paths returning a receipt of `undefined`s.
+
+  **Read this before upgrading: fields that were always `undefined` on the generic paths now carry real values.**
+
+  Providers that implement `prepareExecuteAndWait` now populate `updateId` and `transactionHash` on the `TxReceipt` from `submitTransaction`; before this change those fields were `undefined` on the generic paths regardless of provider. **Application code that branches on their absence will now take a path it never took** — an `if (!receipt.updateId)` fallback, a "pending" placeholder, a skipped block, a conditional render. Nothing was removed and no type changed, so this is a fix restoring intended behaviour rather than a breaking change, but it is a real change in what your code receives at runtime and it is worth grepping for.
+
+  **What was wrong.** CIP-0103 has two execute verbs, and the standard's own types (`@canton-network/core-wallet-dapp-rpc-client@1.4.0`) define them as:
+
+  ```ts
+  PrepareExecute = (params) => Promise<Null>;
+  PrepareExecuteAndWait = (params) => Promise<PrepareExecuteAndWaitResult>;
+  ```
+
+  Both generic adapters called the first and read its result as though it were the second, casting a `Null` to a `TxReceipt`. Against a conformant wallet the caller received a receipt whose every field was `undefined`. It is also why several adapters invented `transactionHash` values: the interface asked for something the path could not produce.
+
+  **What changed.** `GenericAnnounceAdapter` and `GenericDiscoveryAdapter` now prefer `prepareExecuteAndWait` and read the real `updateId` and `completionOffset` out of its executed-transaction response.
+
+  **This is a negotiation, not a substitution.** `prepareExecuteAndWait` is optional in the standard — PartyLayer's own `CIP0103_MANDATORY_METHODS` lists ten methods and does not include it — and at least one provider we integrate implements only `prepareExecute` and answers the other with `4200`. Switching unconditionally would therefore have broken a working integration. So the adapter asks once per provider, falls back to `prepareExecute` when — and only when — the provider reports the method as unsupported (`4200` / `-32601`), and remembers the answer.
+
+  **Wallets without the awaited verb are unchanged.** They keep exactly today's behaviour, degraded rather than broken, and the adapter logs the reason once, naming the wallet and the missing method, so the cause is visible without interrupting the flow.
+
+  **It never submits twice.** A fallback issues a second submit, so it fires only when the wallet rejected the _method_ and nothing reached the ledger. A user rejection, a timeout, or any uncoded failure re-throws instead. If the awaited verb succeeds but returns no update id, the response is returned as-is rather than retried — the transaction is already committed.
+
+  Adapters that do not go through the generic paths are untouched.
+
+- fbda51f: Add `requestTransfer`, a typed transfer method where the wallet performs the interactive submission.
+
+  An application passes an intent — receiver, amount, instrument and its issuing admin, optional metadata and deadline. The wallet builds the command from it, prepares it against its own validator, decodes and displays it, obtains the user's approval, signs, executes, and returns the real ledger update id. The application never holds the prepared transaction and never sees the hash before the user does.
+
+  This exists so that a transfer does not have to be routed through `ledgerApi`. A generic proxy pointed at the interactive-submission endpoints is a request to sign arbitrary bytes: the wallet cannot decode what was asked for, so it cannot render a meaningful confirmation, so the user approves a hash. `ledgerApi` is unchanged, and this method sits alongside it.
+
+  New in `@partylayer/core`:
+
+  - `TransferIntent`, `TransferResult`, `TokenInstrumentId`
+  - `toTransferIntent()` and `TRANSFER_INTENT_FIELDS` — the field allowlist every adapter builds its wallet request through, so a caller-supplied option cannot reach a wallet
+  - `WalletAdapter.requestTransfer?()` — optional; a wallet that cannot both return a real update id and show an explicit user approval does not implement it
+  - `CapabilityKey` gains `'transfer'`; `ErrorMappingContext.phase` gains `'requestTransfer'`
+
+  New in `@partylayer/sdk`:
+
+  - `PartyLayerClient.requestTransfer()`, which narrows the intent through the allowlist before any adapter sees it and throws `CapabilityNotSupportedError` when the active wallet does not implement it
+
+  Additive throughout: no existing method signature, adapter contract, or published interface changes. Ask before calling with `session.capabilitiesSnapshot.includes('transfer')`, or require it at connect with `connect({ requiredCapabilities: ['transfer'] })`.
+
+  `TransferResult.updateId` is required and always real. An adapter that cannot obtain one throws rather than substituting a command id, a submission id, a signature, or a generated string.
+
+  Implemented natively by three adapters, each mapping the intent onto its wallet's own typed transfer:
+
+  - **Console** — `submitCommands`, with the update id read from the `txChanged` stream and correlated to the call by signature. Requires `executeBefore`, and carries `meta` only as a single `memo`; both are refused rather than silently dropped.
+  - **Nightly** — `createTransferCommand` + `submitTransactionCommand`. The only one of the three that carries the instrument's issuing admin through to the wallet.
+  - **Loop** — the SDK's `transfer()` in `wait` mode, which is where `RunTransactionResponse.update_id` is populated.
+
+  Each declares the `transfer` capability. Every other adapter reports it absent, so a dApp can ask before offering the action. The per-adapter integration status is in docs/typed-transfer-support.md.
+
+### Patch Changes
+
+- 2eee6b1: listWallets now filters to the client's configured channel rather than the literal 'stable'. The channel option now affects listing: a client on channel 'beta' lists the beta entries. A client on stable behaves exactly as before, and includeExperimental still returns everything unfiltered.
+- Updated dependencies [a0292e5]
+- Updated dependencies [9e8ca31]
+- Updated dependencies [fbda51f]
+  - @partylayer/adapter-console@0.4.0
+  - @partylayer/adapter-nightly@0.3.0
+  - @partylayer/adapter-loop@0.5.0
+  - @partylayer/core@0.14.0
+  - @partylayer/provider@0.6.0
+  - @partylayer/adapter-bron@0.5.0
+  - @partylayer/adapter-cantor8@0.4.2
+  - @partylayer/adapter-send@1.2.8
+  - @partylayer/registry-client@0.6.4
+
+## 0.18.2
+
+### Patch Changes
+
+- d25d850: Report the signMessage capability from the announce entry's declared capabilities rather than a fixed baseline, so a wallet that cannot sign is not advertised as able to. Also widen the injected discovery scan to the window globals that announce-transport registry entries declare, so a wallet at its own dedicated global is found generically. Both are additive and change no behavior for any wallet currently in the registry.
+- Updated dependencies [f7ee857]
+- Updated dependencies [4309023]
+- Updated dependencies [4309023]
+  - @partylayer/provider@0.5.2
+  - @partylayer/core@0.13.0
+  - @partylayer/adapter-bron@0.4.1
+  - @partylayer/adapter-cantor8@0.4.1
+  - @partylayer/adapter-console@0.3.19
+  - @partylayer/adapter-loop@0.4.3
+  - @partylayer/adapter-nightly@0.2.21
+  - @partylayer/adapter-send@1.2.7
+  - @partylayer/registry-client@0.6.3
+
+## 0.18.1
+
+### Patch Changes
+
+- Updated dependencies [2646186]
+  - @partylayer/adapter-cantor8@0.4.0
+
+## 0.18.0
+
+### Minor Changes
+
+- 4fb8c0f: listWallets now hides a registry wallet whose adapter is not registered, unless the wallet is announce transport (Console, Send). This generalizes the existing discovery-adapter gating to every transport that needs an app-registered adapter: a wallet that ships a PartyLayer adapter package (Loop, Cantor8, Nightly, Bron, WalletConnect), or a discovery-adapter popup/remote wallet whose official ProviderAdapter the app supplies. It matches the library default (RainbowKit): a wallet the app cannot actually connect is not shown, because clicking it could only fail. Announce wallets stay visible with no app adapter, because the SDK drives them from the registry entry and installing the extension is enough. The classification is read from each entry's declared transport, never a hardcoded list.
+
+  Impact: an app that registers the default builtin adapters (Loop, Cantor8, Nightly) alongside Console and Send over announce sees the same picker as before, except Bron and WalletConnect are now hidden until their adapters are registered (they require an OAuth configuration and a WalletConnect project id respectively). Register an adapter to surface its wallet.
+
+### Patch Changes
+
+- Updated dependencies [a5da315]
+  - @partylayer/adapter-bron@0.4.0
+
+## 0.17.1
+
+### Patch Changes
+
+- 698418e: Discovery-adapter wallets wired with the factory form now survive a page reload. On reload the SDK revives the session before the connect path injects the registry `networkHosts`, so a factory-form adapter (`create(host)`, the pattern the generic-bridge guide recommends because one registry entry then serves all three networks) had no host: its `restore` could not resolve the official adapter, fell through to as-is, and the first request after reload threw `provider requested before host resolution`. `restoreSession` now injects the registry entry's `networkHosts` and resolves the factory adapter's host, taking the network from the persisted session's own `network` field, before calling `restore`. The network gate still runs first, so a session whose network does not match the configured network is refused under enforcement or flagged under the off mode exactly as before. Instance-form adapters, which already set their official adapter at construction, are unaffected.
+- 1435eb1: Correct the `adapters` JSDoc on `PartyLayerConfig` (and the matching inline comment in the client) so the documented defaults match `getBuiltinAdapters()`. The prose said the defaults were Console, Loop, and Cantor8; the actual no-config defaults are 5N Loop, Cantor8, and Nightly. Console and Send are CIP-0103 native and arrive through the announce path, and Bron and WalletConnect require configuration and are opt-in. Documentation only; no runtime or type-signature change.
+- Updated dependencies [17466dc]
+- Updated dependencies [703a645]
+- Updated dependencies [17466dc]
+- Updated dependencies [17466dc]
+  - @partylayer/adapter-bron@0.3.0
+  - @partylayer/adapter-cantor8@0.3.0
+  - @partylayer/adapter-console@0.3.18
+  - @partylayer/adapter-send@1.2.6
+
+## 0.17.0
+
+### Minor Changes
+
+- Remote and popup wallets now survive a page reload. When a discovery-adapter wallet's official `ProviderAdapter` implements `restore`, the generic discovery bridge now calls it on reload: it revives the persisted session, validates it against the configured network, asks the official adapter to restore, and adopts the returned live provider. Before this, the bridge rebuilt a fresh session-less provider, so the user appeared connected but the first request after the reload failed with a "Not connected" error. Wallets whose adapter does not implement `restore` are unchanged and still fall back to a fresh connect.
+
+  This adds a public `restore` method to the exported `GenericDiscoveryAdapter`, so it is a minor rather than a patch. It also corrects the `registryUrl` default in the `PartyLayerConfig` JSDoc, which named a stale `/v1/wallets.json` path instead of the base host.
+
+### Patch Changes
+
+- Mark the package as free of import-time side effects (`"sideEffects": false`) so bundlers can tree-shake unused exports. The flag was in the repository but had never been published, so no installed version carried it and the measured tree-shaking never reached consumers; this is the change that delivers it. Verified per package that nothing runs at import beyond pure construction: no side-effect or asset imports, no writes to `window`, `globalThis`, or `global`, no prototype patching, and no import-time storage, DOM, or network access.
+- Updated dependencies
+  - @partylayer/core@0.12.1
+  - @partylayer/provider@0.5.1
+  - @partylayer/registry-client@0.6.2
+  - @partylayer/adapter-console@0.3.17
+  - @partylayer/adapter-loop@0.4.2
+  - @partylayer/adapter-cantor8@0.2.20
+  - @partylayer/adapter-bron@0.2.21
+  - @partylayer/adapter-nightly@0.2.20
+  - @partylayer/adapter-send@1.2.5
+
+## 0.16.0
+
+### Minor Changes
+
+- d132cf3: Structured logging with levels and correlation ids, silent by default.
+
+  The SDK now follows the library convention that a kit stays silent unless the
+  application opts in. The default logger is a no-op, so with no logger configured the
+  client prints nothing. To restore console output, pass `logger: console`; verbosity is
+  then set with the new `logLevel` config (`debug`, `info`, `warn`, `error`, or
+  `silent`, defaulting to `info`). Filtering happens centrally in the client, so
+  adapters never filter themselves.
+
+  Every log line now carries a machine readable payload `{ event, correlationId?, ...safe
+fields }`, and every emitted event produces one structured log line at a mapped level.
+  A correlation id is generated at the start of connect, session restore, signTransaction,
+  and submitTransaction, and threaded through that operation's logs and events so a
+  multi step flow can be traced end to end. Log payloads follow the same privacy rules as
+  telemetry: no raw party ids, session ids, transaction hashes, or origins.
+
+  The LoggerAdapter interface is unchanged, so a dApp passing plain `console` keeps
+  working. Behavior change to note: an app that relied on the previous automatic console
+  output must now pass `logger: console` to see logs.
+
+  Also fixes three user visible strings that contained an em dash (a log message, an
+  error message, and a scaffold template subtitle).
+
+### Patch Changes
+
+- Updated dependencies [d7317a5]
+- Updated dependencies [482ec3e]
+- Updated dependencies [d132cf3]
+  - @partylayer/core@0.12.0
+  - @partylayer/provider@0.5.0
+  - @partylayer/adapter-loop@0.4.1
+  - @partylayer/adapter-bron@0.2.20
+  - @partylayer/adapter-cantor8@0.2.19
+  - @partylayer/adapter-console@0.3.16
+  - @partylayer/adapter-nightly@0.2.19
+  - @partylayer/adapter-send@1.2.4
+  - @partylayer/registry-client@0.6.1
+
+## 0.15.0
+
+### Minor Changes
+
+- Carry the wallet's payout preapproval signal through to the active session.
+
+### Patch Changes
+
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+  - @partylayer/core@0.11.0
+  - @partylayer/adapter-loop@0.4.0
+  - @partylayer/provider@0.4.0
+  - @partylayer/registry-client@0.6.0
+  - @partylayer/adapter-bron@0.2.19
+  - @partylayer/adapter-cantor8@0.2.18
+  - @partylayer/adapter-console@0.3.15
+  - @partylayer/adapter-nightly@0.2.18
+  - @partylayer/adapter-send@1.2.3
+
+## 0.14.1
+
+### Patch Changes
+
+- Updated dependencies [4850140]
+  - @partylayer/core@0.10.0
+  - @partylayer/adapter-bron@0.2.18
+  - @partylayer/adapter-cantor8@0.2.17
+  - @partylayer/adapter-console@0.3.14
+  - @partylayer/adapter-loop@0.3.15
+  - @partylayer/adapter-nightly@0.2.17
+  - @partylayer/adapter-send@1.2.2
+  - @partylayer/provider@0.3.2
+  - @partylayer/registry-client@0.5.3
+
+## 0.14.0
+
+### Minor Changes
+
+- feat(sdk): Console is served via the generic CIP-0103 announce path (removed from default adapters, GenericAnnounceAdapter); add signMessageBase64 announce config; isRecognizedNetwork network fallback.
+
+### Patch Changes
+
+- Updated dependencies
+  - @partylayer/adapter-console@0.3.13
+
+## 0.13.3
+
+### Patch Changes
+
+- eeaddad: Fix `ledgerApi` wallet divergence so one call works across all wallets. The SDK
+  boundary (`LedgerApiParams`) accepts a friendly superset, `requestMethod` in
+  either case (plus `PATCH`) and `body` as a JSON string **or** a plain object, and
+  each adapter normalizes to what its wallet requires:
+
+  - **CIP-0103 `window.canton` RPC wallets**, Send, Console, Nightly,
+    WalletConnect, and the SDK announce bridge, get a **lower-case** verb + an
+    **object** body, per the canonical CIP-0103 OpenRPC `LedgerApiRequest` schema
+    (splice-wallet-kernel). `CIP0103LedgerApiRequest` is corrected to this shape.
+  - **Loop** (Loop SDK adapter) and **Bron** (REST proxy) get a **JSON-string**
+    body.
+
+  New `@partylayer/core` helpers: `normalizeLedgerMethodLower` +
+  `ledgerApiBodyToObject` (the CIP-0103 wallets); `normalizeLedgerMethodUpper` +
+  `ledgerApiBodyToString` are retained for Loop/Bron.
+
+  The CIP-0103 provider bridge forwards the verb case and the body type (string or
+  object) unchanged to the active wallet's adapter. It no longer `String()`-s an
+  object body into `"[object Object]"`. Generic docs/examples use the canonical
+  `/v2/state/active-contracts` endpoint (Loop aliases the older `/v2/state/acs`).
+
+  No on-wire change for valid Loop/Bron callers or for Send callers already passing
+  valid input; lower-case + object is the CIP-0103 contract itself, so it cannot
+  break a conformant wallet.
+
+- Updated dependencies [eeaddad]
+  - @partylayer/core@0.9.1
+  - @partylayer/adapter-send@1.2.1
+  - @partylayer/adapter-loop@0.3.14
+  - @partylayer/adapter-console@0.3.12
+  - @partylayer/adapter-nightly@0.2.16
+  - @partylayer/adapter-bron@0.2.17
+  - @partylayer/provider@0.3.1
+
+## 0.13.2
+
+### Patch Changes
+
+- 0b209f4: Send is now served via the generic CIP-0103 announce path by default (the bespoke `SendAdapter` is no longer in `getBuiltinAdapters`); `SendAdapter` remains exported for opt-in manual use. With the registry's `transport:'announce'` Send entry, the SDK constructs a configured `GenericAnnounceAdapter` for Send: metadata/method/restore parity with the previous bespoke adapter, verified by the parity suite, restore re-probe hardening, and a real-extension E2E.
+
+## 0.13.1
+
+### Patch Changes
+
+- 38a6fd0: Restore hardening for configured-announce wallets (Phase 2; client-only, additive). A session revived AS-IS at construction, which happens for a `transport:'announce'` wallet whose adapter is created lazily in `listWallets` (so it isn't registered at ctor restore time), is now re-validated by a LIVE `status()` probe the moment that adapter is created, matching bespoke Send's ctor-time probe.
+
+  Mechanism: a private `activeSessionNeedsProbe` flag is set on the as-is restore path (cleared on a live-probe restore and on fresh connect). When `aggregateAnnouncedWallets` creates the configured adapter for the active session's wallet, it runs `adapter.restore()` once: refreshing the session (emits `session:connected`) or, if the wallet disconnected between reloads, clearing the stale session (emits `session:expired`). Guarded (flag + walletId match + `restore` present) and wrapped in try/catch so a probe failure never breaks `listWallets`.
+
+  Byte-identical for fresh-connect sessions (flag false), bespoke-restored sessions (flag false), and no active session (guard). No public API change. `@partylayer/adapter-send` and the discovery/popup path are untouched.
+
+## 0.13.0
+
+### Minor Changes
+
+- 6f23f2e: `GenericAnnounceAdapter` metadata parity (step 2/3: `signingMethod` via `staticMetadata`, additive). `AnnounceAdapterConfig` gains an optional `staticMetadata?: Record<string, string>`: declarative wallet-specific static values (e.g. `{ signingMethod: 'webauthn-prf' }`), the wagmi connector-property pattern, sourced from the registry `adapter.config.staticMetadata` (string values only).
+
+  Merged into `session.metadata` ONLY when `metadata` is enabled, and it FILLS GAPS: runtime RPC values win on a key collision (`{ ...staticMetadata, ...buildMetadata(...) }`: static first, RPC last), per EIP-6963 (the wallet's runtime announce is authoritative) and the project's existing restore idiom. `restore` merges `persisted < static < RPC`.
+
+  Byte-identical-safe: gated by the same `metadataEnabled` check (no-config / `metadata:false` adapters never build metadata); a `metadata:true` wallet with no `staticMetadata` is identical to the prior `kernelId` step.
+
+## 0.12.1
+
+### Patch Changes
+
+- 197627c: `GenericAnnounceAdapter` metadata parity (step 1/3: `kernelId`, additive). When a configured announce wallet (`config.metadata`) returns a standard splice-wallet-kernel / CIP-0103 `status.kernel.id`, it is now included in `session.metadata.kernelId`. Generic (read from RPC status, not wallet-specific). Fully gated by the existing `metadataEnabled` check: a no-config / `metadata:false` adapter never builds metadata, so behavior is byte-identical; a `metadata:true` wallet whose status has no `kernel` simply omits the key. No public API change.
+
+## 0.12.0
+
+### Minor Changes
+
+- 5fdc6e8: Grow `GenericAnnounceAdapter` to per-registry-entry-configurable capabilities (additive; nothing else changes).
+
+  An announced wallet with a registry entry (`adapter.transport: 'announce'`) can now opt into the optional CIP-0103 surface via its `capabilities.events` + `adapter.config`, mirroring wagmi's optional-method model. New `AnnounceAdapterConfig` (`events`/`restore`/`ledgerApi`/`metadata`/`mapError`); each optional method is assigned only when configured, so `getCapabilities()` and feature-detection stay honest.
+
+  - **events**: `on()` bridges the provider's CIP-0103 `txChanged` → adapter `txStatus`.
+  - **restore**: silent `status()`/`getPrimaryAccount()` probe + expiry + party-match.
+  - **ledgerApi**: proxy the standard CIP-0103 `ledgerApi` call.
+  - **metadata**: richer `session.metadata` on connect when the provider returns it.
+  - **mapError**: optional programmatic error-translation hook (falls through to the SDK's built-in standard EIP-1193/-1474 mapping).
+
+  **Break-nothing / coexistence:** with no config the adapter is byte-identical (3 capabilities, minimal session). A KNOWN wallet with a registered bespoke adapter (e.g. Send) still hits the `adapters.has → continue` bridge branch, untouched. The discovery/popup path (`GenericDiscoveryAdapter`, `warmDiscoveryPlans`, gating, `warmPlans`) and `@partylayer/adapter-send` are not touched. API additive: optional ctor field + optional methods, 0 removed.
+
+## 0.11.0
+
+### Minor Changes
+
+- 4f6fa01: Reactive wallet list: late-announcing wallets now appear LIVE in the picker (no manual refresh), completing the UX of the announce race fix.
+
+  Previously the persistent accumulator CAPTURED a late `canton:announceProvider` (data layer), but `listWallets()` returned a stale one-shot snapshot and the React picker only loaded once on mount, so a wallet injecting after the modal opened never surfaced.
+
+  - **@partylayer/sdk** (minor, additive): new `wallets:changed` event (signal-only `{ type: 'wallets:changed'; reason: 'announced' }`). When the announce accumulator gains a wallet, the client now invalidates the one-shot announce cache (the same invalidation as `refreshDiscovery`) and emits a **debounced** (~50ms, coalesces a burst into one) `wallets:changed`. The authoritative read stays `listWallets()` (which does registry-merge + gating + filtering), mirroring EIP-6963/mipd. `warmPlans` (popup gesture-sync) is a disjoint cache and is untouched; `listWallets()`/`refreshDiscovery()` signatures are unchanged; zero announces → no emit (byte-identical idle); the debounce timer + listener are torn down in `destroy()`.
+  - **@partylayer/react** (patch): `PartyLayerProvider` subscribes to `wallets:changed` and re-lists → `useWallets()` re-renders with the new wallet automatically. `useWallets()`'s signature is unchanged (still a pure context read); the one-shot mount load is preserved; SSR-safe (subscription inside the browser-only effect).
+
+## 0.10.2
+
+### Patch Changes
+
+- a3f2ea4: Fix the announce-discovery race: a wallet that announces (`canton:announceProvider`) **after** the one-shot request window, or on inject before any request, was missed, surfacing as `Wallet "…" did not announce`.
+
+  - **@partylayer/provider** (additive): new `subscribeAnnouncedProviders(onProvider, opts)`, a PERSISTENT (EIP-6963-style) announce subscription that captures late and inject-time announces until the returned unsubscribe runs, and `waitForAnnouncedProvider(predicate, { timeoutMs })`, which resolves the moment a matching announce arrives (vs a fixed window). The existing one-shot `discoverAnnouncedProviders` / `discoverProviders` are **unchanged**.
+  - **@partylayer/sdk** (patch): the client mounts one persistent accumulator at construction (read by `aggregateAnnouncedWallets`, torn down in `destroy()`), so a late/inject-time announce surfaces in `listWallets()`. No public API change.
+  - **@partylayer/adapter-send** (minor): `SendProvider` resolves its channel via resolve-on-arrival (`waitForProvider`), so a late Send announce is no longer missed. Detect and connect now use **split bounds** mirroring the EIP-6963 reactive-readiness model: `detectInstalled`/`isInstalled` waits ~1000ms (best-effort readiness, won't stall the UI when Send is absent; the persistent accumulator self-corrects a later announce), while the deliberate connect/request path waits 3000ms. New `SendProviderOptions.detectTimeoutMs` (default 1000) alongside `announceTimeoutMs` (default 3000). The legacy `SendProviderOptions.discover` hook is **kept (deprecated)**, wrapped for backward compatibility.
+
+  Both the Send connect path and the generic announce path now benefit from the shared persistent primitive. Listeners are removed on teardown (no leak).
+
+- Updated dependencies [a3f2ea4]
+  - @partylayer/provider@0.3.0
+  - @partylayer/adapter-send@1.2.0
+
+## 0.10.1
+
+### Patch Changes
+
+- 5546a90: Add `AdapterNotRegisteredError`: an actionable, catchable error when connecting to a popup/remote (`transport: 'discovery-adapter'`) wallet whose app-supplied provider adapter was never registered.
+
+  Previously `connect({ walletId: 'walley' })` for a known-but-unwired discovery wallet threw a bare `WalletNotFoundError` ("Wallet 'walley' not found"), conflating a config gap with a missing wallet. Now the SDK throws `AdapterNotRegisteredError` (code `ADAPTER_NOT_REGISTERED`) with a generic, registry-derived message that tells you how to wire it: `adapters: [{ providerId, create }]`. Distinct from `WalletNotFoundError` so higher-level UIs (e.g. PartyLayerKit) can catch it specifically. Scoped strictly to `discovery-adapter` entries; truly-unknown wallets still throw `WalletNotFoundError`. Maps to JSON-RPC `INVALID_PARAMS` on the provider surface.
+
+- Updated dependencies [5546a90]
+  - @partylayer/core@0.9.0
+  - @partylayer/provider@0.2.6
+  - @partylayer/adapter-bron@0.2.16
+  - @partylayer/adapter-cantor8@0.2.16
+  - @partylayer/adapter-console@0.3.11
+  - @partylayer/adapter-loop@0.3.13
+  - @partylayer/adapter-nightly@0.2.15
+  - @partylayer/adapter-send@1.1.5
+  - @partylayer/registry-client@0.5.2
+
+## 0.10.0
+
+### Minor Changes
+
+- bef0ac6: `GenericDiscoveryAdapter` now ignores an UNRECOGNIZED wallet-reported network and falls back to the dApp's configured `ctx.network`. Previously `session.network = reportedNetwork ?? account.networkId ?? ctx.network` let a non-null but unrecognized value win. Popup/remote wallets (Walley) report `networkId: "canton:unknown"` on devnet, so the persisted `session.network` became `canton:unknown`, which is uninterpretable and (with the prior core fail-open) silently bypassed the network-mismatch gate, letting a devnet identity restore on a mainnet app.
+
+  Now the bridge picks the first RECOGNIZED of `[reportedNetwork, account.networkId, ctx.network]`, else `ctx.network`. So a Walley devnet connect records `session.network = 'devnet'`, correct, and the restore/connect/tx network-mismatch checks work normally (and stay silent on the legitimate same-network path). Pairs with the core `detectNetworkMismatch` hardening.
+
+### Patch Changes
+
+- Updated dependencies [bef0ac6]
+  - @partylayer/core@0.8.0
+  - @partylayer/adapter-bron@0.2.15
+  - @partylayer/adapter-cantor8@0.2.15
+  - @partylayer/adapter-console@0.3.9
+  - @partylayer/adapter-loop@0.3.12
+  - @partylayer/adapter-nightly@0.2.14
+  - @partylayer/adapter-send@1.1.4
+  - @partylayer/provider@0.2.5
+  - @partylayer/registry-client@0.5.1
+
+## 0.9.0
+
+### Minor Changes
+
+- 3285ed8: Generic network-driven host resolution for discovery-adapter wallets. `config.adapters` now also accepts an `OfficialAdapterFactory` (`{ providerId, create(host) }`); the SDK bridges it via `GenericDiscoveryAdapter`, resolves `host = registryEntry.adapter.networkHosts[activeNetwork]` during the connect warm phase, and constructs the official adapter with that host, so an app sets `<PartyLayerKit network="mainnet">` and never hardcodes a wallet URL.
+
+  Host resolution + official construction happen synchronously during warm-up (`resolveConnectPlan`), preserving the popup-safe gesture-survival invariant: the prepared/fast connect reaches `adapter.connect()` → `window.open` with no awaited ops. Pre-constructed instances keep working unchanged (explicit host overrides `networkHosts`). A wallet with no host for the active network fails with a clear, network-named error, never a silent wrong-network host.
+
+- 3285ed8: Add a network gate to session restore. `restoreSession` now validates the persisted session's network (our network-aware envelope) against the configured network BEFORE any adapter handoff: under enforcement (`guard`/`strict`) a cross-network session is refused and cleared; under `off` it is restored but flagged with `networkMismatch`.
+
+  This closes a silent stale-network restore: a discovery-adapter session has no `adapter.restore`, so it took the "restore as-is" path with no network check, reviving e.g. a devnet identity on a `network="mainnet"` app (the official adapter's restore is silent, so the connect-time mismatch check never fired). Generic for any wallet whose adapter lacks `restore`.
+
+### Patch Changes
+
+- Updated dependencies [3285ed8]
+- Updated dependencies [3285ed8]
+  - @partylayer/core@0.7.0
+  - @partylayer/registry-client@0.5.0
+  - @partylayer/adapter-bron@0.2.14
+  - @partylayer/adapter-cantor8@0.2.14
+  - @partylayer/adapter-console@0.3.8
+  - @partylayer/adapter-loop@0.3.11
+  - @partylayer/adapter-nightly@0.2.13
+  - @partylayer/adapter-send@1.1.3
+  - @partylayer/provider@0.2.4
+
+## 0.8.0
+
+### Minor Changes
+
+- 6efe375: Add `GenericDiscoveryAdapter`: a generic bridge that hosts an app-supplied official `@canton-network/core-wallet-discovery` `ProviderAdapter` (e.g. Walley) as a standard wallet, with NO wallet-specific package and no `@canton-network/*` dependency. `config.adapters` now also accepts an `OfficialProviderAdapter`; the SDK auto-detects and wraps it. The official `provider()` is obtained lazily (SSR-safe) and `getCapabilities()` never reports `events` (popup/remote wallets expose the event surface but do not emit).
+
+  Also adds a popup-safe connect fast-path: a new public `prepareConnect()` primitive plus background warm-up (on `listWallets`) so a popup/remote wallet's `window.open` is reached synchronously from the user gesture (no Safari popup-block). The normal injected/announce connect path is behavior-unchanged; cold-cache discovery connects fall back to it.
+
+- 4c53396: `listWallets()` now hides `transport: 'discovery-adapter'` registry entries whose matching adapter is NOT registered. A discovery-adapter wallet's provider is supplied by the app (an official ProviderAdapter the SDK bridges under `toWalletId(providerId)`); without it the entry can only fail on click. So such an entry surfaces only when its adapter is present, preventing a broken wallet from appearing for consumers who didn't wire it. No-op when the registry is unavailable or has no discovery-adapter entries; normal (injected/announce) entries are never affected.
+- adaff8e: Export `OfficialProviderAdapter` (type) and `isOfficialProviderAdapter` (guard), the official `@canton-network/core-wallet-discovery` ProviderAdapter contract that `config.adapters` accepts and `GenericDiscoveryAdapter` bridges. Needed so consumers (and `@partylayer/react`'s Kit prop) can name the type they already pass.
+
+### Patch Changes
+
+- Updated dependencies [6efe375]
+- Updated dependencies [6efe375]
+- Updated dependencies [adaff8e]
+- Updated dependencies [adaff8e]
+  - @partylayer/core@0.6.0
+  - @partylayer/registry-client@0.4.0
+  - @partylayer/adapter-bron@0.2.13
+  - @partylayer/adapter-cantor8@0.2.13
+  - @partylayer/adapter-console@0.3.7
+  - @partylayer/adapter-loop@0.3.10
+  - @partylayer/adapter-nightly@0.2.12
+  - @partylayer/adapter-send@1.1.2
+  - @partylayer/provider@0.2.3
+
+## 0.7.0
+
+### Minor Changes
+
+- 27e5b68: A2: SDK-level announce discovery. `listWallets()` now aggregates
+  `canton:announceProvider` wallets (EIP-6963-style, provider.md) with the
+  `window.canton` namespace scan, the registry, and registered adapters:
+
+  - a known announced id (matching a wallet's `providerDetection` provider.id)
+    maps to that adapter, no duplicate picker entry (identity bridge);
+  - an UNKNOWN announced id is surfaced as a dynamic `browser:ext:<id>` entry
+    routed to its own extension `target` via the new `GenericAnnounceAdapter`, so
+    future announce-capable Canton wallets appear and route with zero code changes.
+
+  Gated by `discovery: { announce?: boolean }` (default ON in the browser, always
+  skipped under SSR); one-shot cached with a `client.refreshDiscovery()` hook. With
+  zero announcers, `listWallets()` output is unchanged. New exports:
+  `GenericAnnounceAdapter`, `announcedWalletId`, `ANNOUNCED_WALLET_ID_PREFIX`.
+
+### Patch Changes
+
+- 76972de: A2.1: `listWallets()` aggregation now drops injected discovery entries whose
+  identity is UNRESOLVED (`identityResolved === false`) instead of synthesizing a
+  dynamic `browser:ext:<path-id>` entry. This removes the phantom "Canton Wallet"
+  (`browser:ext:canton`) that appeared when Console's bare `window.canton` slot
+  exposed no id and its `status()` probe didn't resolve one. The entry's provider
+  was the slot itself, so clicking it opened Console. The slot's real wallet is
+  represented by its resolved announce entry (bridged to its adapter) instead.
+  Correctness is independent of probe timing.
+- Updated dependencies [27e5b68]
+- Updated dependencies [27e5b68]
+- Updated dependencies [76972de]
+  - @partylayer/provider@0.2.2
+  - @partylayer/adapter-send@1.1.1
+
+## 0.6.0
+
+### Minor Changes
+
+- 2c4c10c: feat(sdk): network-mismatch detection + enforcement (networkEnforcement, default 'guard') + session:networkMismatch event
+
+  Detects when a connected wallet's effective network differs from the dApp's
+  configured network, flags the session (`session.networkMismatch`), and emits
+  `session:networkMismatch`. New `networkEnforcement?: 'off' | 'guard' | 'strict'`
+  config (default `'guard'`): 'strict' also blocks connect; 'guard' blocks
+  wrong-network transactions; 'off' detects + emits only.
+
+  BEHAVIOR: transactions are now blocked on a detected wallet/dApp network
+  mismatch by default; set `networkEnforcement: 'off'` to restore the previous
+  always-proceed behavior. The session's `network` now reflects the wallet's
+  reported network (adapters that read the live wallet); echo-only adapters still
+  report the configured network, so there is no false positive.
+
+### Patch Changes
+
+- Updated dependencies [9642aee]
+- Updated dependencies [2c4c10c]
+- Updated dependencies [2c4c10c]
+- Updated dependencies [9642aee]
+- Updated dependencies [32c6c1c]
+  - @partylayer/core@0.5.0
+  - @partylayer/adapter-loop@0.3.9
+  - @partylayer/provider@0.2.1
+  - @partylayer/adapter-send@1.1.0
+  - @partylayer/adapter-bron@0.2.12
+  - @partylayer/adapter-cantor8@0.2.12
+  - @partylayer/adapter-console@0.3.6
+  - @partylayer/adapter-nightly@0.2.11
+  - @partylayer/registry-client@0.3.3
+
+## 0.5.0
+
+### Minor Changes
+
+- 53b1714: WalletConnect / QR-only wallets now show a scannable QR **in the connect modal**
+  out of the box (no integrator wiring), with a mobile deep-link, and the official
+  dapp-sdk blank `about:blank` popup is suppressed.
+  - **core / sdk:** add an optional `onDisplayUri(uri)` callback to the adapter
+    `connect()` options and to `ConnectOptions`. Adapters call it with a
+    pairing/display URI (e.g. a WalletConnect `wc:` URI) the moment one is
+    produced, before approval; the connect UI uses it to render a QR / deep-link.
+    Backward-compatible (optional).
+  - **adapter-walletconnect:** the official adapter's `onUri` is now always
+    wrapped so the pairing URI is fanned out to BOTH the integrator's
+    `config.onUri` AND the per-connect `onDisplayUri`. No hand-wiring needed. The
+    adapter also narrowly intercepts the official adapter's blank
+    `window.open('', 'wallet-popup')` during connect (no config flag exists to
+    disable it) and restores `window.open` afterward.
+  - **react:** the modal renders the WC QR itself. `handleWalletClick` passes
+    `onDisplayUri` for non-dual (QR-only / remote-signer) wallets and enters the
+    QR view only once a URI actually arrives (wallets that draw their own QR are
+    unaffected). QR generated via `qrcode` (new dependency). Copy is
+    wallet-agnostic for the generic WalletConnect entry ("Scan with your Canton
+    wallet" / "Open wallet"). The dual-transport (Console) extension + placeholder
+    QR-fallback flow is unchanged.
+
+### Patch Changes
+
+- 8532f3d: Fix: replace runtime `require()` of workspace packages with proper ESM imports
+  so browser/ESM consumers don't crash.
+
+  `PartyLayerClient.asProvider()` did a runtime
+  `require('@partylayer/provider')`. In the ESM build that hits esbuild's
+  `__require` shim and throws **"Dynamic require of \"@partylayer/provider\" is
+  not supported"** in browser bundles (Next dev **and** production), crashing
+  `PartyLayerKit` on mount (`asProvider()` is called from the React provider).
+  It now uses a top-of-file static `import { createProviderBridge } from
+'@partylayer/provider'`. `asProvider()` stays synchronous with the same
+  `CIP0103Provider` return type, and there is no dependency cycle
+  (`@partylayer/provider` does not import `@partylayer/sdk`).
+
+  `@partylayer/conformance-runner` (an ESM `type: module` CLI) used the `require`
+  global (`require.resolve(...)` and a `require(adapterPath)` CJS fallback) in its
+  adapter loader, which is undefined at runtime in ESM. It now derives a real Node
+  require via `createRequire(import.meta.url)`.
+
+- Updated dependencies [42c862d]
+- Updated dependencies [6103d32]
+- Updated dependencies [c18a275]
+- Updated dependencies [53b1714]
+  - @partylayer/provider@0.2.0
+  - @partylayer/adapter-send@1.0.4
+  - @partylayer/core@0.4.0
+  - @partylayer/adapter-bron@0.2.11
+  - @partylayer/adapter-cantor8@0.2.11
+  - @partylayer/adapter-console@0.3.5
+  - @partylayer/adapter-loop@0.3.8
+  - @partylayer/adapter-nightly@0.2.10
+  - @partylayer/registry-client@0.3.2
+
+## 0.4.1
+
+### Patch Changes
+
+- Repair the transitive `@partylayer/core` dependency reference.
+
+  `0.4.0` itself does not directly import any new core symbols, but it
+  depends on `@partylayer/registry-client@^0.3.0`, whose `0.3.0` release was
+  broken in the same way. Republishing the SDK ensures its workspace
+  dependency resolution points to the fixed `registry-client@0.3.1` and the
+  fixed `core@0.3.0`.
+
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+  - @partylayer/adapter-send@1.0.1
+  - @partylayer/registry-client@0.3.1
+  - @partylayer/core@0.3.0
+  - @partylayer/adapter-bron@0.2.10
+  - @partylayer/adapter-cantor8@0.2.10
+  - @partylayer/adapter-console@0.3.4
+  - @partylayer/adapter-loop@0.3.7
+  - @partylayer/adapter-nightly@0.2.9
+  - @partylayer/provider@0.1.7
+
+## 0.4.0
+
+### Minor Changes
+
+- 7770870: Registry-driven detection and adapter-aware picker readiness.
+
+  `@partylayer/core` and `@partylayer/registry-client` introduce a multi-signal `providerDetection` schema on `RegistryWalletEntry`. Registry entries can declare a transport plus an ordered list of matcher rules (`domain`, `exact`, `prefix`) over the live CIP-0103 `status` shape: `kernel.url`, `kernel.userUrl`, `kernel.id`. This lets new CIP-0103 wallets be added to the ecosystem through a registry JSON update without an SDK code change, and lets the SDK identify a wallet by stable signals (vendor domain) when the per-install identity field (`kernel.id`) varies. The matcher engine is OR-combined, case-insensitive on domains, case-sensitive on exact values, and short-circuits on first match. 33 unit tests cover the matcher semantics.
+
+  The registry-client schema also gains an optional `RegistryWalletEntry.beta?: boolean` flag and a `RegistryWalletEntry.cip0103?: { native, evidence, since }` marker. The picker UI uses `cip0103.native` to surface CIP-0103-native wallets in a dedicated section regardless of install state. The optional `beta` flag, when present on any entry, propagates through `WalletInfo.metadata.beta = 'true'` so UIs can render a "Beta" badge generically.
+
+  `@partylayer/sdk` re-exports the detection helpers (`isCip0103Native`, `Cip0103Support`, `ProviderDetection`, `matchesProviderDetection`) and adds `getAdapter(walletId)` for adapter-aware UI integrations that need to probe `detectInstalled()` directly. The `tsup` external list grew to externalise all built-in adapter packages. The bundled SDK dist drops from ~80 KB ESM to ~30 KB ESM with no public API change.
+
+  `@partylayer/react` renders the optional Beta badge in the wallet picker modal from `WalletInfo.metadata.beta`. The picker also adds an adapter-aware NATIVE readiness probe: when an adapter implements `detectInstalled()`, the picker reflects its result rather than guessing from a static install hint.
+
+### Patch Changes
+
+- Updated dependencies [7770870]
+  - @partylayer/registry-client@0.3.0
+
+## 0.2.8
+
+### Patch Changes
+
+- fix: resolve workspace:\* protocol in published packages and add ledgerApi support
+- Updated dependencies
+  - @partylayer/core@0.2.6
+  - @partylayer/provider@0.1.3
+  - @partylayer/registry-client@0.2.6
+  - @partylayer/adapter-console@0.2.5
+  - @partylayer/adapter-loop@0.2.5
+  - @partylayer/adapter-cantor8@0.2.5
+  - @partylayer/adapter-nightly@0.2.5
+  - @partylayer/adapter-bron@0.2.5
 
 ## 0.2.6
 
@@ -39,12 +1032,12 @@
 
 - Update GitHub repository URLs to cayvox/CantonConnect
 - Updated dependencies
-  - @cantonconnect/core@0.2.2
-  - @cantonconnect/registry-client@0.2.2
-  - @cantonconnect/adapter-console@0.2.2
-  - @cantonconnect/adapter-loop@0.2.2
-  - @cantonconnect/adapter-cantor8@0.2.2
-  - @cantonconnect/adapter-bron@0.2.2
+  - @partylayer/core@0.2.2
+  - @partylayer/registry-client@0.2.2
+  - @partylayer/adapter-console@0.2.2
+  - @partylayer/adapter-loop@0.2.2
+  - @partylayer/adapter-cantor8@0.2.2
+  - @partylayer/adapter-bron@0.2.2
 
 ## 0.2.1
 
@@ -52,12 +1045,12 @@
 
 - Add comprehensive README documentation for npm package pages
 - Updated dependencies
-  - @cantonconnect/core@0.2.1
-  - @cantonconnect/adapter-bron@0.2.1
-  - @cantonconnect/adapter-cantor8@0.2.1
-  - @cantonconnect/adapter-console@0.2.1
-  - @cantonconnect/adapter-loop@0.2.1
-  - @cantonconnect/registry-client@0.2.1
+  - @partylayer/core@0.2.1
+  - @partylayer/adapter-bron@0.2.1
+  - @partylayer/adapter-cantor8@0.2.1
+  - @partylayer/adapter-console@0.2.1
+  - @partylayer/adapter-loop@0.2.1
+  - @partylayer/registry-client@0.2.1
 
 ## 0.2.0
 
@@ -68,6 +1061,7 @@
   CantonConnect provides a WalletConnect-like experience for Canton Network dApps, enabling seamless integration with multiple Canton wallets through a unified API.
 
   Features:
+
   - Support for Console Wallet, 5N Loop, Cantor8, and Bron wallets
   - React hooks and components for easy integration
   - TypeScript support with full type definitions
@@ -77,9 +1071,9 @@
 ### Patch Changes
 
 - Updated dependencies
-  - @cantonconnect/core@0.2.0
-  - @cantonconnect/registry-client@0.2.0
-  - @cantonconnect/adapter-console@0.2.0
-  - @cantonconnect/adapter-loop@0.2.0
-  - @cantonconnect/adapter-cantor8@0.2.0
-  - @cantonconnect/adapter-bron@0.2.0
+  - @partylayer/core@0.2.0
+  - @partylayer/registry-client@0.2.0
+  - @partylayer/adapter-console@0.2.0
+  - @partylayer/adapter-loop@0.2.0
+  - @partylayer/adapter-cantor8@0.2.0
+  - @partylayer/adapter-bron@0.2.0

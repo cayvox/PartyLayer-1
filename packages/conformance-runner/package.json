@@ -1,17 +1,22 @@
 {
   "name": "@partylayer/conformance-runner",
-  "version": "0.1.6",
+  "version": "0.2.13",
   "description": "CLI tool for running adapter conformance tests",
   "type": "module",
   "bin": {
     "partylayer-conformance": "./dist/index.js"
   },
+  "files": [
+    "dist"
+  ],
   "main": "./dist/index.js",
   "scripts": {
-    "build": "tsc && tsc --project tsconfig.esm.json",
+    "build": "tsup",
     "clean": "rm -rf dist",
+    "prepublishOnly": "pnpm run clean && pnpm run build",
     "lint": "eslint src --ext .ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
   },
   "keywords": [
     "canton",
@@ -31,12 +36,13 @@
   },
   "license": "MIT",
   "dependencies": {
-    "@partylayer/core": "workspace:*",
-    "@partylayer/provider": "workspace:*",
+    "@partylayer/core": "workspace:^",
+    "@partylayer/provider": "workspace:^",
     "commander": "^14.0.2"
   },
   "devDependencies": {
     "@types/node": "^20.11.0",
-    "typescript": "^5.3.3"
+    "typescript": "^5.3.3",
+    "vitest": "^1.2.0"
   }
 }

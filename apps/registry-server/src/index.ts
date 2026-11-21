@@ -12,6 +12,7 @@
 
 import express from 'express';
 import cors from 'cors';
+import { createRegistryRateLimit } from './rate-limit.js';
 import { readFileSync, existsSync, statSync } from 'fs';
 import { join, resolve } from 'path';
 import { createHash } from 'crypto';
@@ -22,8 +23,8 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 // Detect if running from src/ (tsx dev) or dist/ (compiled)
-// From src/index.ts: src -> registry-server -> apps -> wallet-sdk (3 levels)
-// From dist/index.js: dist -> registry-server -> apps -> wallet-sdk (3 levels, same)
+// From src/index.ts: src -> registry-server -> apps -> PartyLayer (3 levels)
+// From dist/index.js: dist -> registry-server -> apps -> PartyLayer (3 levels, same)
 const ROOT_DIR = resolve(__dirname, '../../..');
 
 const PORT = parseInt(process.env.PORT || '3001', 10);
@@ -65,6 +66,7 @@ app.use(cors({
 
 // Security: disable directory listing, no eval/templating
 app.disable('x-powered-by');
+app.use(createRegistryRateLimit());
 
 /**
  * Compute ETag from file content

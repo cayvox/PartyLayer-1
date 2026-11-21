@@ -1,0 +1,89 @@
+/**
+ * Live backend: the same TokenizationBackend interface, served by the DevNet gateway
+ * over HTTP. Selected with VITE_BACKEND=live (demo stays the default). The browser
+ * never holds a ledger credential; the gateway does all ledger and registry work.
+ */
+import type {
+  TokenHoldingRef,
+  TokenTransferInstructionRef,
+  TokenAllocationRef,
+  TokenTransfer,
+  TransferInstructionActionRequest,
+  AllocationInstructionRequest,
+  AllocationActionRequest,
+} from '@partylayer/react/query';
+import type { TokenizationBackend, IssuerChoice } from './backend';
+import type { DemoPartyKey, InstrumentConfig } from './types';
+import { toTrafficCost, type CostEstimation } from '@partylayer/react';
+import { mapGatewayError } from './gateway-errors';
+import { withRetry } from './retry';
+
+/** The gateway's int64-as-string cost estimate on the wire. */
+interface EstimationWire {
+  estimationTimestamp: string;
+  confirmationRequestTrafficCostEstimation: string;
+  confirmationResponseTrafficCostEstimation: string;
+  totalTrafficCostEstimation: string;
+}
+
+/** Map the gateway's wire estimate to a branded CostEstimation; null passes through. */
+function toCostEstimation(wire: EstimationWire | null): CostEstimation | null {
+  if (!wire) return null;
+  return {
+    estimationTimestamp: wire.estimationTimestamp,
+    // int64-as-string to validated, branded TrafficCost (precision preserved).
+    confirmationRequestTrafficCostEstimation: toTrafficCost(wire.confirmationRequestTrafficCostEstimation),
+    confirmationResponseTrafficCostEstimation: toTrafficCost(wire.confirmationResponseTrafficCostEstimation),
+    totalTrafficCostEstimation: toTrafficCost(wire.totalTrafficCostEstimation),
+  };
+}
+
+async function call<T>(base: string, path: string, body: unknown, signal?: AbortSignal): Promise<T> {
+  const res = await fetch(base.replace(/\/$/, '') + path, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body ?? {}),
+    signal,
+  });
+  if (!res.ok) {
+    const raw = await res.json().catch(() => ({}));
+    throw mapGatewayError(res.status, raw);
+  }
+  return (await res.json()) as T;
+}
+
+export function createLiveBackend(gatewayUrl: string): TokenizationBackend {
+  const ok = { ok: true } as const;
+  return {
+    readHoldings: (party, signal) => call<TokenHoldingRef[] | null>(gatewayUrl, '/tokenization/holdings', { party }, signal),
+    readIncoming: (party, signal) => call<TokenTransferInstructionRef[] | null>(gatewayUrl, '/tokenization/incoming', { party }, signal),
+    readHoldingRefs: (party, signal) => call<TokenHoldingRef[] | null>(gatewayUrl, '/tokenization/holdingRefs', { party }, signal),
+    readInstrument: (signal) => call<InstrumentConfig | null>(gatewayUrl, '/tokenization/instrument', {}, signal),
+    readSupply: (signal) => call<string | null>(gatewayUrl, '/tokenization/supply', {}, signal),
+    readAllocations: (signal) => call<TokenAllocationRef[] | null>(gatewayUrl, '/tokenization/allocations', {}, signal),
+    submitTransfer: (transfer: TokenTransfer, signal) => withRetry((s) => call(gatewayUrl, '/tokenization/transfer', { transfer }, s), signal).then(() => ok),
+    submitTransferAction: (request: TransferInstructionActionRequest, signal) => withRetry((s) => call(gatewayUrl, '/tokenization/transferAction', { request }, s), signal).then(() => ok),
+    submitIssuerChoice: (choice: IssuerChoice, signal) => withRetry((s) => call(gatewayUrl, '/tokenization/issuerChoice', { choice }, s), signal).then(() => ok),
+    submitAllocation: (request: AllocationInstructionRequest, signal) => withRetry((s) => call(gatewayUrl, '/tokenization/allocation', { request }, s), signal).then(() => ok),
+    submitAllocationAction: (request: AllocationActionRequest, signal) => withRetry((s) => call(gatewayUrl, '/tokenization/allocationAction', { request }, s), signal).then(() => ok),
+    // Cost estimate: deliberately NOT wrapped in withRetry, and any failure resolves to
+    // null, so the UI shows an illustrative caption rather than an error and submit is
+    // never blocked.
+    estimateTransfer: (transfer: TokenTransfer, signal) =>
+      call<{ costEstimation: EstimationWire | null }>(gatewayUrl, '/tokenization/transferEstimate', { transfer }, signal)
+        .then((data) => toCostEstimation(data.costEstimation))
+        .catch(() => null),
+  };
+}
+
+/** Party display labels from the gateway /config (GET; used in live mode). */
+export async function fetchGatewayParties(gatewayUrl: string): Promise<Partial<Record<DemoPartyKey, string>>> {
+  try {
+    const res = await fetch(gatewayUrl.replace(/\/$/, '') + '/config');
+    if (!res.ok) return {};
+    const cfg = (await res.json()) as { parties?: Record<string, string> };
+    return (cfg.parties ?? {}) as Partial<Record<DemoPartyKey, string>>;
+  } catch {
+    return {};
+  }
+}

@@ -1,0 +1,188 @@
+# Performance
+
+> Published on the docs site: [partylayer.xyz/docs/performance](https://partylayer.xyz/docs/performance).
+
+This document is anchored to measurements, not advice. Every number here is reproducible
+with `pnpm gate:size` (the bundle scenarios) or the commands noted in each section.
+
+## Measured baseline: raw dist per package
+
+Total JavaScript shipped in each package's `dist` (CommonJS `.js` plus ESM `.mjs`),
+measured at the versions released on 2026-07-26. This is the whole package, not what a
+consumer bundles.
+
+| Package | dist JS (js + mjs) | index.js alone |
+|---|---|---|
+| @partylayer/react | 335 KB | 142 KB |
+| @partylayer/sdk | 137 KB | 71 KB |
+| @partylayer/provider | 74 KB | 37 KB |
+| @partylayer/core | 71 KB | 36 KB |
+| @partylayer/react-native | 60 KB | 12 KB |
+| @partylayer/session | 52 KB | 26 KB |
+| @partylayer/registry-client | 36 KB | 18 KB |
+
+Package size is not what a dApp ships. What a dApp ships is the tree shaken, minified, and
+gzipped cost of the exports it actually imports. That is measured below.
+
+The default catalog loads reviewed official SDKs and hosted profiles lazily during wallet discovery;
+configured WalletConnect and Bron transports also load lazily. At the earlier published checkpoint, the measured initial
+SDK contribution is about 50.10 kB gzip (53.5 kB budget); React Native headless is about 50.35 kB
+(53.75 kB budget). These budgets exclude asynchronous chunks. The kit lists wallets on mount, so
+eligible wallet/discovery chunks can start loading before the picker opens;
+these numbers are not total first-load bytes. Connecting WalletConnect loads
+its underlying transport. Run `pnpm gate:size`
+for the current numbers. The React connection surface at that checkpoint measured about 36.02 kB gzip with
+a 37.5 kB budget after adding keyboard behavior, English/Turkish UI, optional
+authentication actions, scoped recent activity, network guidance and exact-decimal
+holdings UI. Server challenge/verification helpers use a separate
+`@partylayer/core/authentication` subpath; ordinary wallet clients do not import them.
+Session revision guards and serialized persistence add about 0.45 kB to the SDK/RN
+headless bundles. Complete transaction-event evidence, combined-only routing and
+signature echo checks add a further ~0.34 kB. Official native ownership, abort/identity guards and the stable provider facade
+add approximately 3.5 kB; the dynamically imported official discovery runtime
+is excluded from the initial-bundle scenario and downloaded during preparation.
+The older comparisons below remain dated historical measurements.
+
+### Published installation corrections
+
+Core 0.16.1, SDK 0.22.1 and React Native 2.0.0 were published on 2026-11-15.
+The following measurements apply to the reviewed files whose compiled contents
+match the public archives. See the
+[publication evidence](releases/consumer-installation-corrections-2026-11-15.md).
+
+| Scenario | Gzip contribution | Existing budget |
+| --- | --- | --- |
+| React connection surface | 36.09 kB | 37.5 kB |
+| Token holdings query | 467 B | 700 B |
+| Exact token comparison | 336 B | 500 B |
+| React Native headless | 23.00 kB | 53.75 kB |
+| React Native UI | 5.04 kB | 5.5 kB |
+| Browser SDK client | 53.29 kB | 53.5 kB |
+
+The independently implemented OneSwap hosted profile is emitted as a private
+dynamic module. Actual packed Vite and Next.js builds place it outside their
+initial static chunk graph. Discovery can prewarm this module before a wallet
+is selected. None of the six byte limits was increased.
+
+## What each import scenario costs
+
+Measured with `size-limit` (esbuild bundler, gzip). Peer dependencies (React, React Query,
+React Native, react-native-svg, AsyncStorage) are treated as external because the consuming
+app already ships them, so each number is PartyLayer's marginal contribution. Binary assets
+imported transitively by wallet SDKs (icons, fonts) are mapped to esbuild's empty loader,
+because a web bundler emits those as separate files rather than inlining them into the
+JavaScript bundle.
+
+The "before" column is the same measurement with no `sideEffects` field declared. The
+"after" column is with `"sideEffects": false` declared on the library packages.
+
+| Scenario | Import | Before | After | Change |
+|---|---|---|---|---|
+| Connect surface | `{ PartyLayerProvider, ConnectButton }` from `@partylayer/react` | 47,152 B | 29,220 B | -38.0% |
+| One token hook | `{ useTokenHoldings }` from `@partylayer/react/query` | 1,004 B | 455 B | -54.7% |
+| Matching helper | `{ tokenDecimalEquals }` from `@partylayer/react/query` | 849 B | 283 B | -66.7% |
+| RN headless | `{ createReactNativeClient }` from `@partylayer/react-native` | 42,324 B | 42,217 B | -0.25% |
+| RN ui | `{ ConnectButton }` from `@partylayer/react-native/ui` | 2,970 B | 2,970 B | 0% |
+| SDK client | `{ createPartyLayer }` from `@partylayer/sdk` | 42,130 B | 42,022 B | -0.26% |
+
+Reading of the numbers:
+
+- The `@partylayer/react` package holds many independent hooks and components, so declaring
+  it free of load time side effects is what lets a bundler drop the exports a scenario does
+  not touch. The connect surface drops 38 percent, and a single token hook or the matching
+  helper drop by half or more.
+- `tokenDecimalEquals` reaches 283 B because its module imports nothing. It is now close to
+  free, which is the expected result for a pure string comparison helper.
+- The React Native and SDK entrypoints barely move. `createReactNativeClient` and the ui
+  `ConnectButton` are already single purpose, and `createPartyLayer` statically wires the
+  built in wallet adapters, which is a deliberate design choice rather than unused code a
+  bundler could remove. Their `sideEffects` declaration is still correct and guards against
+  future regressions, but there was little unused code to drop today.
+
+### The react-native ui scenario and its measurement caveat
+
+The ui entrypoint imports `react-native` and `react-native-svg`, which only resolve inside
+a React Native bundler (Metro), not a web bundler. The size-limit config marks those and
+the other React Native peers as external, so the current 5.04 kB figure is the cost of PartyLayer's
+own ui code, not a runnable React Native bundle. The Expo demo web smoke exercises the Metro web export;
+native iOS/Android device acceptance is separate. The smoke is described in `demos/expo-connect/README.md` and in
+`docs/releasing.md`.
+
+## Budgets and where they are enforced
+
+Budgets are set slightly above the current measurement so they act as regression guards
+rather than aspirations that fail on day one. They live in `.size-limit.js` at the repo
+root and run as the `gate:size` stage of `pnpm gate`, right after `gate:build` (the stage
+needs the built `dist`). A change that inflates a bundle past its budget fails locally and
+in CI rather than reaching a consumer.
+
+| Scenario | Measured | Budget | Headroom |
+|---|---|---|---|
+| Connect surface | 36.02 kB | 37.5 kB | ~0.5% |
+| One token hook | 467 B | 700 B | ~50% |
+| Matching helper | 294 B | 500 B | ~70% |
+| RN headless | 50.35 kB | 53.75 kB | ~0.5% |
+| RN ui | 5.04 kB | 5.5 kB | ~9% |
+| SDK client | 50.10 kB | 53.5 kB | ~0.5% |
+
+Request/receipt command-ID correlation adds about 0.12 kB to the shared SDK and
+RN headless entrypoints. The budgets include that reviewed guard so an unrelated
+wallet response cannot be accepted as the requested transaction's receipt.
+
+The 2026-10-30 candidate adds approximately 0.38 kB to SDK/RN for persistent
+registry re-verification and bounded storage startup. Optional transaction-journal
+wiring adds about 0.17 kB to the connection surface; the persistence code stays in
+the separate `/journal` entry. The server reference is not part of the browser
+bundle. These are import-scenario measurements, not total application bytes or
+live wallet latency.
+
+The large entrypoints currently carry less than 1 percent headroom. Budget changes
+require an explicit review of the behavior and measured cost. The tiny helper entrypoints carry more relative headroom because a few hundred
+bytes of normal churn swing their percentage sharply.
+
+Run the check on its own with `pnpm gate:size`, or `pnpm size` during development.
+
+## Tree shaking requirements for consumers
+
+The budgets above are only achievable if the consuming app lets the bundler shake the tree.
+
+- Import named exports from the package or its subpath, for example
+  `import { useTokenHoldings } from '@partylayer/react/query'`. Every publishable library
+  package declares `"sideEffects": false`, so a bundler may drop any module whose exports
+  you do not use.
+- Do not use namespace imports such as `import * as PartyLayer from '@partylayer/react'`. A
+  namespace import references the whole module object and prevents the bundler from dropping
+  unused exports.
+- Use the ESM build. The packages ship both CommonJS and ESM through the `exports` map, and
+  bundlers pick ESM automatically. A CommonJS `require` cannot be tree shaken.
+- Prefer the narrowest subpath. `@partylayer/react/query` carries the data hooks without the
+  connect UI, and `@partylayer/react-native` (headless) carries no SVG renderer, which lives
+  behind `@partylayer/react-native/ui`.
+- The three command line packages (`create-partylayer-app`, `@partylayer/registry-cli`,
+  `@partylayer/conformance-runner`) do not declare `sideEffects` because their entry runs on
+  load by design. They are run as commands, not imported, so tree shaking does not apply.
+
+## Caching already provided by the registry client
+
+`@partylayer/registry-client` implements stale while revalidate caching, so an app does not
+refetch the wallet registry on every call. It is configurable through `RegistryClientOptions`:
+
+- `cacheTtl` (default 1 hour): while the cached registry is younger than this, it is served
+  directly with no network request.
+- `staleTtl` (default 24 hours): once older than `cacheTtl` but younger than `staleTtl`, the
+  cached copy is served and marked stale while a refresh happens.
+- `storage`: a pluggable adapter, so the cache can persist across sessions rather than
+  living only in memory.
+
+These are knobs on the existing client, not something an app has to build.
+
+## Lazy loading already in place
+
+Heavy or rarely needed modules are loaded on demand with dynamic `import`, so they never
+enter the initial bundle:
+
+- `packages/react/src/modal.tsx` imports `qrcode` only when a QR code is about to render.
+- `packages/sdk/src/client.ts` imports the `OriginNotAllowedError` class from
+  `@partylayer/core` only on the error path.
+- `packages/conformance-runner` loads `@partylayer/provider` and the modules under test
+  dynamically at run time.

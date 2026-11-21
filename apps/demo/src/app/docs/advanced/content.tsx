@@ -48,15 +48,15 @@ const client = createPartyLayer({
       <H3>Collected Metrics</H3>
       <P>The SDK collects 9 canonical metrics:</P>
       <UL>
-        <LI><Code>{'wallet_connect_attempts'}</Code> — Total connection attempts</LI>
-        <LI><Code>{'wallet_connect_success'}</Code> — Successful connections</LI>
-        <LI><Code>{'sessions_created'}</Code> — New sessions created</LI>
-        <LI><Code>{'sessions_restored'}</Code> — Sessions restored from storage</LI>
-        <LI><Code>{'restore_attempts'}</Code> — Session restore attempts</LI>
-        <LI><Code>{'registry_fetch'}</Code> — Registry fetch operations</LI>
-        <LI><Code>{'registry_cache_hit'}</Code> — Registry cache hits</LI>
-        <LI><Code>{'registry_stale'}</Code> — Stale registry data usage</LI>
-        <LI><Code>{'error_<CODE>'}</Code> — Error counts by error code</LI>
+        <LI><Code>{'wallet_connect_attempts'}</Code>, Total connection attempts</LI>
+        <LI><Code>{'wallet_connect_success'}</Code>, Successful connections</LI>
+        <LI><Code>{'sessions_created'}</Code>, New sessions created</LI>
+        <LI><Code>{'sessions_restored'}</Code>, Sessions restored from storage</LI>
+        <LI><Code>{'restore_attempts'}</Code>, Session restore attempts</LI>
+        <LI><Code>{'registry_fetch'}</Code>, Registry fetch operations</LI>
+        <LI><Code>{'registry_cache_hit'}</Code>, Registry cache hits</LI>
+        <LI><Code>{'registry_stale'}</Code>, Stale registry data usage</LI>
+        <LI><Code>{'error_<CODE>'}</Code>, Error counts by error code</LI>
       </UL>
 
       <Callout type="tip" title="Privacy">
@@ -68,17 +68,41 @@ const client = createPartyLayer({
 
       <H2 id="session-persistence">Session Persistence</H2>
       <P>
-        PartyLayer automatically persists wallet sessions in <Code>{'localStorage'}</Code> so users
-        don{"'"}t need to reconnect on page reload.
+        Session persistence has three distinct layers: the wallet-owned connection, the SDK cache
+        and the React live session view. A stored cache or cookie is never proof of wallet
+        authorization or application login.
       </P>
-
       <H3>How It Works</H3>
       <UL>
-        <LI>Sessions are stored encrypted in <Code>{'localStorage'}</Code></LI>
-        <LI>Sessions are bound to the dApp <Strong>origin</Strong> — a session from <Code>{'app-a.com'}</Code> cannot be restored on <Code>{'app-b.com'}</Code></LI>
-        <LI>Expired sessions (past <Code>{'expiresAt'}</Code>) are automatically pruned</LI>
-        <LI>On mount, <Code>{'PartyLayerKit'}</Code> attempts to restore the last session via the adapter{"'"}s <Code>{'restore()'}</Code> method</LI>
+        <LI>Official native discovery owns its provider-ID hint. The SDK restores a native session only after checking the live provider, party, network, origin and expiry.</LI>
+        <LI>Old native caches without that provider hint require one explicit reconnect; failed probes do not display a cached connected account.</LI>
+        <LI>The SDK cache uses its configured storage/crypto adapters. The default SDK storage is browser localStorage; its origin-derived crypto encoding is not a secret vault and can fall back to base64. Do not put authentication secrets or keys in this cache.</LI>
+        <LI>The React kit uses an in-memory live projection by default. Explicit <Code>sessionOptions.storage</Code> is a UI cache; it does not bypass wallet checks.</LI>
+        <LI>Standalone <Code>@partylayer/session</Code> stores default to encrypted IndexedDB where supported and memory otherwise. This standalone default is distinct from the kit and SDK defaults.</LI>
       </UL>
+      <H3>Per-Wallet Restore Support</H3>
+      <P>
+        Restoration depends on wallet support and live authentication. Official popup providers are
+        probed before restoration; OneSwap requires a fresh explicit connection. A wallet logout,
+        expired session or changed party/network must not be hidden by a saved UI state. Inspect the
+        current session and capabilities instead of assuming every wallet silently reconnects.
+      </P>
+
+      <H3>Explicit logout across tabs</H3>
+      <P>Coordinated React logout requires React 3.1.2+ and session 1.1.10+.</P>
+      <P>
+        Enable <Code>{'sessionOptions={{ broadcast: true }}'}</Code> on <Code>PartyLayerKit</Code>{' '}
+        to coordinate sessions across tabs on the same origin. Use <Code>ConnectButton</Code>{' '}
+        or the React disconnect hooks, including <Code>@partylayer/react/query</Code>, for
+        explicit logout. They cancel reconnect and synchronize the shared store. Receiving
+        tabs disconnect their own provider once and clear their SDK-backed account view;
+        they do not rebroadcast that logout. Provider failures remain visible as session errors.
+      </P>
+      <P>
+        A direct SDK call manages that client&apos;s lifecycle. Applications that orchestrate
+        their own session store must coordinate its lifecycle too. Cross-tab synchronization
+        does not turn a cached identity into wallet authorization.
+      </P>
 
       <H3>Custom Storage</H3>
       <P>Provide a custom storage adapter for non-browser environments:</P>
@@ -99,17 +123,29 @@ const client = createPartyLayer({
 
       <H2 id="registry">Registry Internals</H2>
       <P>
-        The PartyLayer wallet registry is a signed JSON manifest containing metadata for all
-        verified Canton wallets.
+        The PartyLayer wallet registry is a JSON manifest of wallet metadata, published from a
+        public repository and served from a single HTTPS origin. It is validated against a JSON
+        Schema on every build. It is not signed today: see <Strong>Integrity</Strong> below.
       </P>
 
       <H3>How the Registry Works</H3>
       <UL>
-        <LI><Strong>Fetch</Strong> — On init, the SDK fetches the registry from <Code>{'registry.partylayer.xyz'}</Code></LI>
-        <LI><Strong>Verify</Strong> — The registry payload is verified against embedded public keys</LI>
-        <LI><Strong>Cache</Strong> — Verified data is cached with ETag support for efficient updates</LI>
-        <LI><Strong>Fallback</Strong> — If the registry is unreachable, the SDK falls back to adapter-only discovery</LI>
+        <LI><Strong>Fetch</Strong>, On init, the SDK fetches the registry from <Code>{'registry.partylayer.xyz'}</Code></LI>
+        <LI><Strong>Validate</Strong>, The payload is checked against the registry schema; entries that do not match are rejected</LI>
+        <LI><Strong>Cache</Strong>, Validated data is cached with ETag support for efficient updates</LI>
+        <LI><Strong>Fallback</Strong>, If the registry is unreachable, the SDK falls back to adapter-only discovery</LI>
       </UL>
+
+      <H3>Integrity</H3>
+      <P>
+        What protects the registry today is schema validation on every build, a gate that blocks the
+        removal of a wallet{"'"}s CIP-0103 native flag, a public commit history, and TLS to a single
+        origin. <Strong>Ed25519 signing is implemented in the client but is not enabled in
+        production.</Strong> Verification only runs when a consumer passes{' '}
+        <Code>{'registryPublicKeys'}</Code>, and no signature is published for either channel, so the
+        verification path does not execute. Do not treat registry contents as cryptographically
+        attested.
+      </P>
 
       <H3>Custom Registry</H3>
       <CodeBlock language="typescript">{`<PartyLayerKit
@@ -152,10 +188,10 @@ frame-src 'self';  /* For popup-based wallets */`}</CodeBlock>
 
       <H3>Transport Security</H3>
       <UL>
-        <LI><Strong>PostMessage</Strong> — Origin is validated on every message exchange</LI>
-        <LI><Strong>Deep Links</Strong> — HTTPS-only with app-link verification</LI>
-        <LI><Strong>Injected</Strong> — Direct in-process communication (no network)</LI>
-        <LI><Strong>QR/Popup</Strong> — Encrypted channel with session key exchange</LI>
+        <LI><Strong>PostMessage</Strong>, Origin is validated on every message exchange</LI>
+        <LI><Strong>Deep Links</Strong>, HTTPS-only with app-link verification</LI>
+        <LI><Strong>Injected</Strong>, Direct in-process communication (no network)</LI>
+        <LI><Strong>QR/Popup</Strong>, Encrypted channel with session key exchange</LI>
       </UL>
 
       <HR />

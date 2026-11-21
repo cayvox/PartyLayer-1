@@ -1,16 +1,25 @@
 'use client';
 
 import { useDocs } from '../layout';
+// Generated from the wallet registry (registry/v1/stable/registry.json) by
+// scripts/gen-readme.mjs, `pnpm gate:readme` keeps this in sync. Table 1 below
+// renders from it so the built-in wallet list can never drift from the registry.
+import { GENERATED_WALLETS } from './wallets.generated';
 
 export default function WalletsPage() {
-  const { H1, H2, H3, P, Code, CodeBlock, PropsTable, Callout, PrevNext, Strong } = useDocs();
+  const { H1, H2, H3, P, Code, CodeBlock, PropsTable, Callout, PrevNext, Strong, UL, LI, A } = useDocs();
 
   return (
     <>
       <H1>Wallets & Adapters</H1>
       <P>
-        PartyLayer includes 5 built-in wallet adapters and supports custom adapters for any Canton wallet.
+        PartyLayer includes built-in wallet adapters and supports custom adapters for any Canton wallet.
         Wallets are discovered through the registry and CIP-0103 native provider detection.
+      </P>
+      <P>
+        The default catalog is included with the kit; no per-wallet installation is required.
+        Custom adapters are an advanced extension point. For transports and a page per integration, see the{' '}
+        <A href="/wallets">Canton wallet directory</A>.
       </P>
 
       <H2 id="built-in-wallets">Built-in Wallets</H2>
@@ -23,24 +32,18 @@ export default function WalletsPage() {
         }}>
           <thead>
             <tr style={{ background: '#F5F6F8' }}>
-              {['Wallet', 'Transport', 'Detection', 'Auto-registered'].map(h => (
+              {['Wallet', 'Networks', 'Opt-in', 'Additional setup'].map(h => (
                 <th key={h} style={{ textAlign: 'left', padding: '10px 14px', fontWeight: 600, color: '#0B0F1A', borderBottom: '1px solid rgba(15,23,42,0.10)', fontSize: 13 }}>{h}</th>
               ))}
             </tr>
           </thead>
           <tbody>
-            {[
-              { name: 'Console Wallet', transport: 'PostMessage', detection: 'Browser extension', auto: 'Yes' },
-              { name: '5N Loop', transport: 'QR Code / Popup', detection: 'Mobile / Web app', auto: 'Yes' },
-              { name: 'Cantor8 (C8)', transport: 'Deep Link', detection: 'Browser extension', auto: 'Yes' },
-              { name: 'Nightly', transport: 'Injected', detection: 'window.nightly.canton', auto: 'Yes' },
-              { name: 'Bron', transport: 'OAuth', detection: 'Enterprise config', auto: 'No' },
-            ].map(w => (
-              <tr key={w.name} style={{ borderBottom: '1px solid rgba(15,23,42,0.10)' }}>
+            {GENERATED_WALLETS.map(w => (
+              <tr key={w.id} style={{ borderBottom: '1px solid rgba(15,23,42,0.10)' }}>
                 <td style={{ padding: '10px 14px', fontWeight: 500, color: '#0B0F1A' }}>{w.name}</td>
-                <td style={{ padding: '10px 14px', color: '#64748B' }}>{w.transport}</td>
-                <td style={{ padding: '10px 14px', color: '#64748B', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: 12.5 }}>{w.detection}</td>
-                <td style={{ padding: '10px 14px', color: w.auto === 'Yes' ? '#166534' : '#92400E', fontWeight: 500 }}>{w.auto}</td>
+                <td style={{ padding: '10px 14px', color: '#64748B' }}>{w.networks.join(', ')}</td>
+                <td style={{ padding: '10px 14px', color: w.optIn ? '#92400E' : '#166534', fontWeight: 500 }}>{w.optIn ? 'Yes' : 'No'}</td>
+                <td style={{ padding: '10px 14px', color: '#64748B', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: 12.5 }}>{w.id === 'walletconnect' ? 'Your project ID' : w.id === 'bron' ? 'Your OAuth/API configuration' : 'Included'}</td>
               </tr>
             ))}
           </tbody>
@@ -48,27 +51,102 @@ export default function WalletsPage() {
       </div>
 
       <Callout type="note">
-        All wallets except <Strong>Bron</Strong> are auto-registered when using <Code>{'PartyLayerKit'}</Code>.
-        Bron requires explicit configuration because it needs an OAuth client ID.
+        Wallets marked <Strong>Opt-in</Strong> (<Strong>Bron</Strong>, <Strong>WalletConnect</Strong>) require explicit
+        configuration: pass <Code>{'bron'}</Code> for OAuth/API access and <Code>{'walletConnect'}</Code>
+        with your Cloud project id. Their runtime dependencies are included. The default catalog
+        supplies the other supported wallets for the configured network and channel.
       </Callout>
 
-      <H2 id="adding-bron">Adding Bron (Enterprise)</H2>
-      <CodeBlock language="tsx">{`import { PartyLayerKit } from '@partylayer/react';
-import { getBuiltinAdapters } from '@partylayer/sdk';
-import { BronAdapter } from '@partylayer/adapter-bron';
+      <H2 id="capability-matrix">Capability Matrix</H2>
+      <P>
+        Not every wallet supports every operation. This matrix is generated from the active SDK integrations. Check it before building features
+        that depend on specific capabilities.
+      </P>
 
-<PartyLayerKit
-  network="mainnet"
-  appName="My dApp"
-  adapters={[
-    ...getBuiltinAdapters(),
-    new BronAdapter({
-      clientId: 'your-oauth-client-id',
-      // Optional: custom OAuth redirect URI
-      // redirectUri: 'https://my-app.com/callback',
-    }),
-  ]}
->`}</CodeBlock>
+      <div style={{ overflowX: 'auto', marginBottom: 24 }}>
+        <table style={{
+          width: '100%', borderCollapse: 'collapse', fontSize: 14,
+          fontFamily: 'ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif',
+          border: '1px solid rgba(15,23,42,0.10)', borderRadius: 10, overflow: 'hidden',
+        }}>
+          <thead>
+            <tr style={{ background: '#F5F6F8' }}>
+              {['Wallet', 'connect', 'signMessage', 'signTransaction', 'submitTransaction', 'ledgerApi', 'restore'].map(h => (
+                <th key={h} style={{ textAlign: 'left', padding: '10px 14px', fontWeight: 600, color: '#0B0F1A', borderBottom: '1px solid rgba(15,23,42,0.10)', fontSize: 13 }}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {GENERATED_WALLETS.map(entry => ({ name: entry.name, connect: true, ...entry.capabilities })).map(w => (
+              <tr key={w.name} style={{ borderBottom: '1px solid rgba(15,23,42,0.10)' }}>
+                <td style={{ padding: '10px 14px', fontWeight: 500, color: '#0B0F1A' }}>{w.name}</td>
+                {['connect', 'signMessage', 'signTransaction', 'submitTransaction'].map(cap => {
+                  const val = w[cap as keyof typeof w] as boolean;
+                  return (
+                    <td key={cap} style={{ padding: '10px 14px', textAlign: 'center' }}>
+                      {val ? <span title="Supported" style={{ color: '#166534' }}>{'supported'}</span> : <span title="Not supported" style={{ color: '#991B1B' }}>{'none'}</span>}
+                    </td>
+                  );
+                })}
+                <td style={{ padding: '10px 14px', textAlign: 'center' }}>
+                  {w.ledgerApi ? <span style={{ color: '#166534' }}>supported</span> : <span style={{ color: '#991B1B' }}>none</span>}
+                </td>
+                <td style={{ padding: '10px 14px', textAlign: 'center' }}>
+                  {w.restore ? <span style={{ color: '#166534' }}>{'supported'}</span> : <span style={{ color: '#991B1B' }}>{'none'}</span>}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      <H3 id="capability-notes">Capability Notes</H3>
+      <UL>
+        <LI><Strong>Loop / Nightly / Send, signTransaction:</Strong> these wallets combine signing
+          and submission into a single step. Use <Code>{'submitTransaction'}</Code> directly instead
+          of the separate sign-then-submit pattern. Calling <Code>{'signTransaction'}</Code> on any of
+          them throws <Code>{'CapabilityNotSupportedError'}</Code> pointing you at this fix.</LI>
+        <LI><Strong>Send:</Strong> the default catalog uses the native announce path.
+          It is Mainnet-only in the catalog and requires the wallet&apos;s own login/passkey approval.
+          The standalone compatibility adapter has its own provider identity guard; it is not required
+          for the default kit. See <A href="/docs/wallets/send">the Send guide</A>.</LI>
+        <LI><Strong>Loop, ledgerApi (limited):</Strong> Supports <Code>{'POST /v2/state/acs'}</Code>,{' '}
+          <Code>{'GET /v2/state/acs/active-contracts'}</Code>, <Code>{'POST /v2/commands/submit'}</Code>,{' '}
+          and <Code>{'POST /v2/commands/submit-and-wait'}</Code>. Other endpoints are not available,
+          for broader Ledger API access, check the active capabilities of Nightly or Bron.</LI>
+        <LI><Strong>Cantor8:</Strong> hosted popup integration. Use <Code>{'submitTransaction'}</Code>
+          for its combined sign-and-execute flow. Separate message signing, transaction signing and
+          Ledger API access are not exposed by this integration.</LI>
+        <LI><Strong>Bron, submitTransaction:</Strong> Bron is a remote signer (OAuth), it signs commands
+          but does not submit them directly to the ledger. Pair{' '}
+          <Code>{'signTransaction'}</Code> with your own participant submission, or call{' '}
+          <Code>{'ledgerApi'}</Code> against <Code>{'/v2/commands/submit-and-wait'}</Code> and let Bron sign
+          the pre-built command. Requires the <Code>{'bron'}</Code> configuration with <Code>{'auth'}</Code> and <Code>{'api'}</Code>.</LI>
+        <LI><Strong>Session restore:</Strong> support depends on the wallet and its live authentication.
+          A stored PartyLayer session alone does not establish a wallet connection. Official popup
+          providers are probed before restoration; OneSwap requires a fresh explicit connection.
+          See <a href="/docs/advanced#session-persistence" style={{ color: '#E6B800' }}>
+            Advanced → Session Persistence
+          </a> for per-wallet behavior.</LI>
+      </UL>
+
+      <H2 id="adding-bron">Adding Bron (Enterprise)</H2>
+      <CodeBlock language="tsx">{`import { PartyLayerKit, ConnectButton } from '@partylayer/react';
+
+const walletConnect = { projectId: 'your-walletconnect-project-id' };
+const bron = {
+  auth: {
+    clientId: 'your-client-id',
+    redirectUri: 'https://your-app.com/auth/callback',
+    authorizationUrl: 'https://auth.bron.example/authorize',
+    tokenUrl: 'https://auth.bron.example/token',
+  },
+  api: { baseUrl: 'https://api.bron.example' },
+};
+
+<PartyLayerKit network="mainnet" appName="My dApp" walletConnect={walletConnect} bron={bron}>
+  <ConnectButton />
+</PartyLayerKit>`}</CodeBlock>
 
       <H2 id="discovery">Wallet Discovery</H2>
       <P>
@@ -78,12 +156,13 @@ import { BronAdapter } from '@partylayer/adapter-bron';
       <H3>1. Registry Discovery</H3>
       <P>
         On initialization, the SDK fetches the wallet registry from <Code>{'registry.partylayer.xyz'}</Code>.
-        The registry contains verified wallet metadata — names, icons, capabilities, install hints,
-        and supported networks. Registry entries are cryptographically signed.
+        The registry contains wallet metadata, names, icons, capabilities, install hints,
+        and supported networks. Entries are validated against the registry schema on every build;
+        they are not signed today.
       </P>
       <P>
         If the registry is unreachable, the SDK gracefully falls back to adapter-only discovery,
-        ensuring your dApp still works offline.
+        which can preserve known wallet entries. Hosted-wallet login and ledger access still require their services.
       </P>
 
       <H3>2. CIP-0103 Native Detection</H3>
@@ -99,16 +178,18 @@ const providers = discoverInjectedProviders();
 
       <H2 id="builtin-adapters-function">getBuiltinAdapters</H2>
       <P>
-        Returns all auto-registered adapters (Console, Loop, Cantor8, Nightly):
+        Returns the synchronous legacy subset (Loop, Cantor8, Nightly), not the complete default catalog:
       </P>
       <CodeBlock language="typescript">{`import { getBuiltinAdapters } from '@partylayer/sdk';
 
 const adapters = getBuiltinAdapters();
-// → [ConsoleAdapter, LoopAdapter, Cantor8Adapter, NightlyAdapter]`}</CodeBlock>
+// → [LoopAdapter, Cantor8Adapter, NightlyAdapter]`}</CodeBlock>
 
       <H2 id="custom-adapter">Creating a Custom Adapter</H2>
       <P>
-        To support a new wallet, implement the <Code>{'WalletAdapter'}</Code> interface:
+        New wallets should follow <A href="/docs/generic-bridge">CIP-0103 Path A or B</A>.
+        The following advanced example documents the existing <Code>{'WalletAdapter'}</Code> contract
+        for application-owned integrations and test fixtures:
       </P>
       <CodeBlock language="typescript">{`import type {
   WalletAdapter, AdapterContext, AdapterDetectResult,

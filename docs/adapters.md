@@ -1,10 +1,16 @@
 # Wallet Adapter Contract
 
+> **Compatibility reference:** New wallets must use the generic CIP-0103 paths;
+> `packages/adapters` is closed to new wallet packages. Historical starter/copy
+> examples below apply only to maintaining existing compatibility integrations.
+> dApp developers should use the [one-command kit setup](https://partylayer.xyz/docs/quick-start).
+> Wallet providers should follow the [generic provider guide](https://partylayer.xyz/docs/generic-bridge).
+
 **References:**
 - [OpenRPC dApp API spec](https://github.com/hyperledger-labs/splice-wallet-kernel/blob/main/api-specs/openrpc-dapp-api.json)
 - [Wallet Integration Guide](https://docs.digitalasset.com/integrate/devnet/index.html)
 
-This document describes the contract that all wallet adapters must implement.
+This is the existing WalletAdapter contract reference for advanced application integrations. New wallet teams should use CIP-0103 Path A or Path B in [the generic bridge guide](generic-bridge.md); no new PartyLayer-specific adapter package is needed. Ordinary dApps use the default wallet catalog without manual registration.
 
 ## WalletAdapter Interface
 
@@ -27,11 +33,104 @@ getCapabilities(): CapabilityKey[]
 
 #### detectInstalled()
 
-Detects if wallet is installed/available.
+Reports what a wallet's presence actually is.
 
 ```typescript
 detectInstalled(): Promise<AdapterDetectResult>
+
+interface AdapterDetectResult {
+  /** @deprecated read `availability` — see below for why this misleads */
+  installed: boolean;
+  availability?: Availability;
+  reason?: string;
+}
+
+type Availability =
+  | { kind: 'installed' }                     // probed, and present
+  | { kind: 'not-installed'; install?: string } // probed, and absent
+  | { kind: 'no-local-install' }              // QR / popup / relay: nothing to probe
+  | { kind: 'unknown'; reason?: string };     // the probe failed or timed out
 ```
+
+**Read `availability`, not `installed`.** `installed` remains for source
+compatibility and is exactly `availability.kind === 'installed'`.
+
+##### Four of twelve adapters probe anything real
+
+This is the fact the split exists for, and it is easy to forget and then
+rediscover as a surprise. Measured from shipped source:
+
+| Adapter | Evidence it probes | Answers |
+|---|---|---|
+| `console` | postMessage probe to the extension | `installed` / `not-installed` / `unknown` |
+| `nightly` | `window.nightly?.canton` — **and it announces**, see below | `installed` / `not-installed` |
+| `send` | `canton:announceProvider` + `window.canton` | `installed` / `not-installed` |
+| `GenericAnnounceAdapter` | presence by construction — it only exists if an announce arrived | `installed` |
+| `loop` | **nothing** — QR + WebSocket | `no-local-install` |
+| `cantor8` | **nothing** — hosted web wallet | `no-local-install` |
+| `bron` | **nothing** — OAuth remote signer | `no-local-install` |
+| `walletconnect` | **nothing** — relay | `no-local-install` |
+| `walley` (vendor) | `typeof window.open === 'function'` — true in any browser | derived, vendor not called |
+| `cauri` (vendor) | `Promise.resolve(true)` | derived, vendor not called |
+| `oneswap` (vendor) | `typeof window !== 'undefined'` | derived, vendor not called |
+| `GenericDiscoveryAdapter` | derives from `discovery-adapter` transport | `no-local-install` |
+
+The eight that probe nothing are not defective adapters — a QR wallet, a hosted
+popup, a relay and an OAuth service have no local artefact to look for. They
+previously answered `installed: true`, meaning "reachable", and the picker read
+it as "installed". Cantor8 is not an extension at all: its tile said installed,
+and clicking it opened a tab.
+
+The three vendor `detect()` implementations are quoted above because they are
+constants. `GenericDiscoveryAdapter` therefore does **not** call them and derives
+the answer from the registry's `discovery-adapter` transport instead — see
+`GenericDiscoveryAdapter.detectInstalled`, which is the single place that rule is
+applied.
+
+##### Correction: Nightly does BOTH
+
+An earlier survey classified Nightly by its wire protocol — a non-CIP-0103
+callback interface at `window.nightly.canton` — and concluded from that it does
+not participate in `canton:announceProvider` discovery. **That was wrong.**
+
+Observed on a real browser with the extension installed, by dispatching
+`canton:requestProvider` and listening for replies:
+
+```
+{ id: 'nightly', name: 'Nightly', target: 'nightly', icon: 'data:image/svg+xml;base64,…' }
+```
+
+Nightly injects **and** announces. The lesson generalises past this one wallet:
+**how a wallet is DISCOVERED is independent of the protocol it speaks once
+connected**, and inferring one from the other produces confident wrong answers.
+That independence is why `connect` is its own registry field rather than being
+derived from anything else.
+
+The practical consequence is a duplicate picker row. An announce carrying a
+wallet's id is bridged back to its registry entry by `providerDetection` — which
+Console and Send carry, and which is why they announce without duplicating.
+Nightly has none, so nothing mapped its announce back to its entry and a
+`browser:ext:nightly` twin was minted beside it. The identity-bridge fallback in
+`aggregateAnnouncedWallets` covers exactly that gap: the **seven** wallets whose
+`providerDetection` matchers have not been observed and are therefore absent.
+
+It is also surface-dependent, which raises rather than lowers its severity: the
+trigger is dispatching `canton:requestProvider`, which is ordinary announce
+discovery. Most dApps do it. Our kit demo happens not to, which is the only
+reason the duplicate is invisible there.
+
+##### Known mismatch: Cantor8 classifies as `scan` but opens a tab
+
+Cantor8's registry entry carries `installation.scriptTag`, so
+`classifyWalletTransport` returns `scan` and the picker's subtitle reads "Scan to
+connect". Cantor8 does not present a QR — connecting opens a tab on its hosted
+URL. The subtitle is therefore still wrong for this one wallet, in a smaller way
+than "installed" was.
+
+This is a **registry-data fix, queued with the D5 / D6 registry work** (the
+entries also lack `providerDetection`, and the schema cannot express the
+`transfer`, `ledgerApi`, `popup` or `restore` capabilities). Recorded here so it
+does not fall between pull requests.
 
 #### connect()
 
@@ -115,15 +214,14 @@ capabilityGuard(adapter, ['signMessage', 'signTransaction']);
 
 ## Built-in Adapters
 
-The SDK ships with 5 wallet adapters. Four are auto-registered via `getBuiltinAdapters()`:
+The full default catalog combines existing adapters, CIP-0103 announced providers, and reviewed official SDKs loaded lazily through the generic bridge. It is selected automatically by network and channel. Vala is Devnet beta; WalletConnect uses `config.walletConnect`, and Bron uses `config.bron`.
 
-| Adapter | Wallet | Transport | Auto-registered |
-|---------|--------|-----------|-----------------|
-| `ConsoleAdapter` | Console Wallet | PostMessage (injected) | Yes |
-| `LoopAdapter` | 5N Loop | QR Code / Popup | Yes |
-| `Cantor8Adapter` | Cantor8 | Deep Link | Yes |
-| `NightlyAdapter` | Nightly | Injected (`window.nightly.canton`) | Yes |
-| `BronAdapter` | Bron | OAuth2 / API | No (requires config) |
+OneSwap's hosted profile is independently implemented inside the existing SDK and
+loads through that same bridge. Its incompatible older-core vendor package is a
+development-only protocol oracle; it is not a runtime dependency. See the
+[compatibility matrix](wallet-cip0103-matrix.md).
+
+`getBuiltinAdapters()` is the synchronous legacy subset: Loop, Cantor8 and Nightly. It does not enumerate the full catalog. Omit `adapters` for the recommended defaults, use `additionalAdapters` to extend them, or supply `adapters` only when deliberately replacing them.
 
 ### Nightly Adapter
 
@@ -143,7 +241,7 @@ window.nightly?.canton // NightlyCantonProvider
 - **Session restoration**: Uses `isConnected()` to check if a previous session is still valid.
 
 ```typescript
-// Nightly is auto-registered — no manual setup needed
+// Nightly is auto-registered, no manual setup needed
 const client = createPartyLayer({
   network: 'devnet',
   app: { name: 'My dApp' },

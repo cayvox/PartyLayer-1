@@ -3,7 +3,7 @@
 import { useDocs } from '../layout';
 
 export default function VanillaJsPage() {
-  const { H1, H2, H3, P, Code, CodeBlock, PropsTable, Callout, PrevNext, A, HR } = useDocs();
+  const { H1, H2, H3, P, Code, CodeBlock, PropsTable, Callout, PrevNext, A, HR, Strong } = useDocs();
 
   return (
     <>
@@ -31,7 +31,7 @@ const client = createPartyLayer({
         { prop: 'app.origin', type: 'string', default: 'window.location.origin', description: 'Origin URL for session binding.' },
         { prop: 'registryUrl', type: 'string', default: '"https://registry.partylayer.xyz"', description: 'Wallet registry URL.' },
         { prop: 'channel', type: '"stable" | "beta"', default: '"stable"', description: 'Registry channel.' },
-        { prop: 'storage', type: 'StorageAdapter', default: 'localStorage', description: 'Custom storage adapter for session persistence.' },
+        { prop: 'storage', type: 'StorageAdapter', default: 'Browser localStorage', description: 'Custom SDK cache storage; cached state is not wallet authorization. This differs from standalone session-store defaults.' },
         { prop: 'crypto', type: 'CryptoAdapter', description: 'Custom crypto adapter.' },
         { prop: 'registryPublicKeys', type: 'string[]', description: 'Public keys for registry signature verification.' },
         { prop: 'adapters', type: '(WalletAdapter | AdapterClass)[]', default: 'Built-in adapters', description: 'Custom adapter list.' },
@@ -44,7 +44,7 @@ const client = createPartyLayer({
       <H3>listWallets</H3>
       <P>
         List all available wallets from the registry and registered adapters.
-        Resilient — falls back to adapter-only list if the registry is unreachable.
+        Resilient, falls back to adapter-only list if the registry is unreachable.
       </P>
       <CodeBlock language="typescript">{`const wallets = await client.listWallets();
 
@@ -63,10 +63,24 @@ const signingWallets = await client.listWallets({
       <HR />
 
       <H3>registerAdapter</H3>
-      <P>Register a custom wallet adapter at runtime.</P>
-      <CodeBlock language="typescript">{`import { BronAdapter } from '@partylayer/adapter-bron';
+      <P>Advanced: register an application-owned adapter at runtime. For Bron, prefer
+        <Code>{'createPartyLayer({ ..., bron: config })'}</Code>; its dependencies are included.</P>
+      <CodeBlock language="typescript">{`import { BronAdapter } from '@partylayer/sdk';
 
-client.registerAdapter(new BronAdapter({ clientId: 'your-client-id' }));`}</CodeBlock>
+client.registerAdapter(
+  new BronAdapter({
+    auth: {
+      clientId: 'your-client-id',
+      redirectUri: 'https://your-app.com/auth/callback',
+      authorizationUrl: 'https://auth.bron.example/authorize',
+      tokenUrl: 'https://auth.bron.example/token',
+    },
+    api: {
+      baseUrl: 'https://api.bron.example',
+      getAccessToken: async () => getStoredAccessToken(),
+    },
+  }),
+);`}</CodeBlock>
 
       <H2 id="session-management">Session Management</H2>
 
@@ -136,6 +150,52 @@ console.log('Signed TX:', signed.signedTx);`}</CodeBlock>
 console.log('TX Hash:', receipt.transactionHash);
 console.log('Command ID:', receipt.commandId);
 console.log('Submitted at:', new Date(receipt.submittedAt));`}</CodeBlock>
+
+      <H2 id="ledger-api">Ledger API</H2>
+      <P>
+        Proxy requests to the Canton Ledger API through the connected wallet. Returns raw JSON
+        responses that must be parsed with <Code>{'JSON.parse()'}</Code>.
+      </P>
+      <CodeBlock language="typescript">{`// Query active contracts (wallet balances)
+const result = await client.ledgerApi({
+  requestMethod: 'POST',
+  resource: '/v2/state/active-contracts',
+  body: JSON.stringify({
+    filter: {
+      filtersByParty: {
+        [session.partyId]: {
+          inclusive: {
+            templateFilters: [{ templateId: 'Splice.Amulet:Amulet' }],
+          },
+        },
+      },
+    },
+  }),
+});
+
+const { activeContracts = [] } = JSON.parse(result.response);
+console.log('Contracts found:', activeContracts.length);
+
+// Submit a command directly
+const submitResult = await client.ledgerApi({
+  requestMethod: 'POST',
+  resource: '/v2/commands/submit-and-wait',
+  body: JSON.stringify(commandPayload),
+});`}</CodeBlock>
+      <P>
+        <Strong>Params:</Strong> <Code>{'{ requestMethod: "GET" | "POST" | "PUT" | "DELETE", resource: string, body?: string }'}</Code>
+      </P>
+      <P>
+        <Strong>Returns:</Strong> <Code>{'{ response: string }'}</Code>, raw JSON from the Canton Ledger API.
+      </P>
+      <Callout type="note">
+        Not all wallets support <Code>{'ledgerApi'}</Code>. Cantor8 does not support it at all.
+        Loop supports a limited set of endpoints (ACS queries and command submission).
+        See <A href="/docs/wallets#capability-matrix">Capability Matrix</A> and{' '}
+        <A href="/docs/wallet-balances">Wallet Balances</A> for details.
+      </Callout>
+
+      <HR />
 
       <H2 id="events">Events</H2>
       <P>

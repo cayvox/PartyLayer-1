@@ -1,0 +1,43 @@
+# Canton wallet holdings example
+
+Vite + React + TypeScript workspace example using the public default wallet catalog,
+PartyLayer's ConnectButton and exact token holding summaries. The directory keeps
+its historical name; the UI can connect any supported wallet on the configured
+Devnet. Reading requires a compatible Token Standard and the active ledgerApi
+capability. An authorized application backend is the alternative when the wallet
+does not expose ledger reads.
+
+From the repository root:
+
+```bash
+pnpm install --frozen-lockfile
+pnpm build
+pnpm --filter wallet-balance-loop-example dev
+```
+
+Open the Vite URL printed by the command (normally http://localhost:5174).
+This checkout uses workspace dependencies. It is not a standalone npm project.
+For an independent application, use the published CLI starter and copy `App.tsx`
+after the coordinated package release is available. The app uses the ready
+`useWalletTokenHoldings` reader; it does not require a custom ledger fetcher.
+
+Copy `.env.example` to `.env.local` and set `VITE_HOLDING_INTERFACE_ID` to the
+exact deployed package-id-qualified `Splice.Api.Token.HoldingV1:Holding` interface.
+This is a public identifier, not a credential. Without it, wallet connection remains
+available and the example explains that holdings are not configured. The retained
+`holdings.ts`/fixture tests demonstrate the lower-level application-fetcher pattern
+for integrations that deliberately own their transport.
+
+The example reads ledger-end and a consistent active-contract snapshot through
+the Holding interface. It keeps contract ids, owner, instrument admin/id, exact
+decimal amounts and reported locks. Unsafe offsets, incomplete pagination,
+duplicate contracts and malformed views produce an error instead of a partial
+or invented zero balance. The ready-made account panel and TokenBalances show
+available/locked amounts for the current party/network only.
+
+The test fixtures exercise the read-only request contract; they are not live
+wallet/ledger acceptance. Loop's separately recorded key-unlock problem and all
+remaining live-wallet tests remain in the final acceptance stage.
+
+- [Wallet balances](../../docs/wallet-balances.md)
+- [Transaction lifecycle](../../docs/transaction-lifecycle.md)

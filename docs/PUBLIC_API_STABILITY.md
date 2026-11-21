@@ -70,6 +70,7 @@ client.getActiveSession(): Promise<Session | null>
 client.signMessage(params): Promise<SignedMessage>
 client.signTransaction(params): Promise<SignedTransaction>
 client.submitTransaction(params): Promise<TxReceipt>
+client.ledgerApi(params): Promise<LedgerApiResult>
 client.on(event, handler): () => void
 client.off(event, handler): void
 client.destroy(): void
@@ -80,7 +81,9 @@ client.destroy(): void
 ```typescript
 // All hooks - stable signatures
 usePartyLayer(): PartyLayerClient
-useSession(): Session | null
+useSession(): UseSessionReturn          // M1-S4: reactive store (state + actions)
+useClientSession(): Session | null      // deprecated legacy getter (was useSession)
+useAccount(): UseAccountReturn          // reactive { party, account, status, ... }
 useWallets(): { wallets, isLoading, error }
 useConnect(): { connect, isConnecting, error }
 useDisconnect(): { disconnect, isDisconnecting, error }
@@ -116,6 +119,7 @@ Error codes are stable identifiers for programmatic handling:
 | Code | Meaning |
 |------|---------|
 | `WALLET_NOT_FOUND` | Wallet not in registry |
+| `ADAPTER_NOT_REGISTERED` | Discovery-adapter wallet selected with no matching provider adapter registered |
 | `WALLET_NOT_INSTALLED` | Wallet extension not detected |
 | `USER_REJECTED` | User cancelled operation |
 | `SESSION_EXPIRED` | Session has expired |
@@ -127,6 +131,7 @@ Error codes are stable identifiers for programmatic handling:
 | `REGISTRY_VERIFICATION_FAILED` | Signature verification failed |
 | `REGISTRY_SCHEMA_INVALID` | Invalid registry format |
 | `INTERNAL_ERROR` | Unexpected internal error |
+| `NETWORK_MISMATCH` | Wallet is on a different network than the dApp requires |
 
 ---
 

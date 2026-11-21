@@ -1,0 +1,71 @@
+{
+  "name": "@partylayer/testing",
+  "version": "1.1.12",
+  "sideEffects": false,
+  "description": "Offline test utilities for PartyLayer: mock CIP-0103 provider with failure scenarios, transaction + session lifecycle simulation, TanStack Query helpers, and browser/e2e primitives",
+  "main": "./dist/index.js",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js"
+    },
+    "./query": {
+      "types": "./dist/query.d.ts",
+      "import": "./dist/query.mjs",
+      "require": "./dist/query.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "clean": "rm -rf dist",
+    "lint": "eslint src --ext .ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "keywords": [
+    "canton",
+    "wallet",
+    "cip-0103",
+    "testing",
+    "mock"
+  ],
+  "author": "PartyLayer Contributors",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/PartyLayer/PartyLayer.git",
+    "directory": "packages/testing"
+  },
+  "homepage": "https://partylayer.xyz",
+  "bugs": {
+    "url": "https://github.com/PartyLayer/PartyLayer/issues"
+  },
+  "dependencies": {
+    "@partylayer/core": "workspace:^",
+    "@partylayer/provider": "workspace:^",
+    "@partylayer/session": "workspace:^"
+  },
+  "peerDependencies": {
+    "@tanstack/query-core": ">=5.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@tanstack/query-core": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@partylayer/conformance-runner": "workspace:^",
+    "@tanstack/query-core": "^5.0.0",
+    "@types/node": "^20.11.0",
+    "tsup": "^8.0.0",
+    "typescript": "^5.3.3",
+    "vitest": "^1.2.0",
+    "@vitest/ui": "^1.2.0"
+  }
+}

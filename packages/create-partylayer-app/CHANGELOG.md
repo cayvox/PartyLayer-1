@@ -1,0 +1,156 @@
+# create-partylayer-app
+
+## 0.7.2
+
+### Patch Changes
+
+- 118db04: Update offline integration diagnostics to the published SDK 0.21.0 / React 3.3.0
+  baseline. Older installations receive a migration-guide warning without importing
+  application code, reading credentials, installing packages or changing files.
+
+## 0.7.1
+
+### Patch Changes
+
+- a3e52c2: Correct the README's outdated Node 18 minimum to Node 20.12.0 and document that offline Doctor diagnostics are available from CLI 0.7.0.
+- de16860: Move the Next.js SSR starter to the patched Next 15.5.28 maintenance line and React 19, use asynchronous request cookies, and label the persisted cookie identity as a display hint until the wallet is revalidated. The demo and Studio use the same patched framework line with asynchronous route parameters.
+
+## 0.7.0
+
+- Align the declared Node minimum (20.12.0) with the existing prompt-library requirement; add a direct-runtime engine compatibility check.
+
+### Minor Changes
+
+- Add read-only `--doctor [directory] [--json]` installation diagnostics for existing applications. Report unresolved packages, incompatible peers and Node engines, duplicate React/query contexts and competing lockfiles without executing application code or changing project files. Preserve all existing scaffolding and installer recovery behavior.
+
+## 0.6.2
+
+### Patch Changes
+
+- c130fc4: Report dependency installation failures with a nonzero exit code, keep the generated project, show package-manager diagnostics and print the complete recovery commands. Failed or unlaunchable installs no longer report successful setup. Successful installation and explicit no-install scaffolding keep their existing flows.
+
+## 0.6.1
+
+### Patch Changes
+
+- ea0de53: Describe Canton Network wallet integration, CIP-0103 support and framework-specific entry points in npm metadata. Link packages to the relevant setup guides and improve discovery with relevant keywords. Runtime APIs and wallet capability contracts are unchanged.
+
+## 0.6.0
+
+### Minor Changes
+
+- Document all six shipped templates, automatic dependency installation, wallet configuration
+  and the limits of SSR UI cookies and in-memory vertical demos.
+
+- Include the reviewed, pinned Walley, Cauri, OneSwap and Vala official SDKs in the existing SDK with lazy loading through the generic CIP-0103 bridge. React and generated projects use the same default catalog without wallet-specific imports or installation. WalletConnect and Bron use shared application configuration; custom adapters can replace or extend defaults.
+
+  Filter wallets by the configured network and channel, align discovery capabilities with implemented methods, warm popup connections before returning the picker list, and validate restored official providers instead of reviving expired sessions. Vala remains Devnet beta.
+
+## 0.5.4
+
+### Patch Changes
+
+- e3fb990: Point the scaffolded templates' docs link at `/docs` instead of `/docs/introduction`.
+
+  The site now serves the introduction at `partylayer.xyz/docs` and 301s the old
+  `/docs/introduction` URL to it, so the link in every scaffolded README would
+  otherwise send a new user through a redirect on their first click. All four
+  templates (react-vite, next-ssr, vanilla, vue-nuxt-pinia) are updated.
+
+## 0.5.3
+
+### Patch Changes
+
+- Bump the scaffold templates' `@partylayer/sdk` pin from `^0.17.0` to `^0.18.0` so a
+  newly scaffolded app installs the current SDK (0.18.0). A caret range on a 0.x version
+  only allows updates within the same minor, so `^0.17.0` could not resolve the 0.18.0
+  minor and a scaffolded app would have installed a stale SDK.
+
+## 0.5.2
+
+### Patch Changes
+
+- The scaffold templates now pin `@partylayer/sdk` at a range that includes 0.17.0. A caret range on a 0.x version allows only patch updates, so the previous `^0.16.0` pin could not resolve to the new 0.17.0, and a freshly scaffolded app would have installed a stale sdk without the discovery restore fix. All six templates are updated: next-ssr, react-dvp, react-tokenization, react-vite, vanilla, and vue-nuxt-pinia. The templates ship in this package (`files` includes `templates`), so the fix reaches consumers only with a release.
+
+## 0.5.1
+
+### Patch Changes
+
+- d132cf3: Structured logging with levels and correlation ids, silent by default.
+
+  The SDK now follows the library convention that a kit stays silent unless the
+  application opts in. The default logger is a no-op, so with no logger configured the
+  client prints nothing. To restore console output, pass `logger: console`; verbosity is
+  then set with the new `logLevel` config (`debug`, `info`, `warn`, `error`, or
+  `silent`, defaulting to `info`). Filtering happens centrally in the client, so
+  adapters never filter themselves.
+
+  Every log line now carries a machine readable payload `{ event, correlationId?, ...safe
+fields }`, and every emitted event produces one structured log line at a mapped level.
+  A correlation id is generated at the start of connect, session restore, signTransaction,
+  and submitTransaction, and threaded through that operation's logs and events so a
+  multi step flow can be traced end to end. Log payloads follow the same privacy rules as
+  telemetry: no raw party ids, session ids, transaction hashes, or origins.
+
+  The LoggerAdapter interface is unchanged, so a dApp passing plain `console` keeps
+  working. Behavior change to note: an app that relied on the previous automatic console
+  output must now pass `logger: console` to see logs.
+
+  Also fixes three user visible strings that contained an em dash (a log message, an
+  error message, and a scaffold template subtitle).
+
+## 0.5.0
+
+### Minor Changes
+
+- Two new scaffold templates: react-tokenization (CIP-0056 holdings, transfers, and issuance over a typed demo backend) and react-dvp (atomic delivery versus payment over CIP-0056 allocations), both extracted from the validated vertical examples and pinned to the published @partylayer/react 2.2.1 surface. Both are reference quality, not production audited.
+
+## 0.4.1
+
+### Patch Changes
+
+- Refresh the scaffold template package pins to the current release so a newly scaffolded app installs the latest PartyLayer packages.
+
+## 0.4.0
+
+### Minor Changes
+
+- 9ca71bf: Add the **vanilla** template: plain TypeScript + Vite, no framework. Completes the four-template set (react-vite, next-ssr, vue-nuxt-pinia, vanilla).
+
+  Uses the `@partylayer/sdk` client API directly: `createPartyLayer(...)` → `client.listWallets()` lists the verified registry wallets → `client.connect({ walletId })` → `client.on('session:connected'|'session:disconnected')` + `client.getActiveSession()`. A hand-rolled DOM connect UI: no React/Vue, no provider package (the SDK client is the dApp's surface).
+
+## 0.3.0
+
+### Minor Changes
+
+- b562fd9: Add the **vue-nuxt-pinia** template: Nuxt 3 + Vue 3 + Pinia with server-side session rendering.
+
+  A Server-rendered page reads the session cookie via Nuxt's SSR-aware `useCookie()`, wrapped as a `CookieAdapter` and fed to `@partylayer/session`'s `createCookieStorage`: the connected party renders in the initial HTML (no flash), the same primitive the Next template feeds with `next/headers` `cookies()`. The PartyLayer session is surfaced as a **Pinia store** (`isConnected`/`party`/`status` + `connect`/`disconnect`), the idiomatic "PartyLayer + Pinia" pattern. Nuxt's cookie API stays in the app, never in `@partylayer/session`.
+
+  `create-partylayer-app` now offers three templates: `react-vite`, `next-ssr`, and `vue-nuxt-pinia`.
+
+## 0.2.0
+
+### Minor Changes
+
+- d09209f: Add the **next-ssr** template: Next.js App Router with server-side session rendering.
+
+  A Server Component reads the session cookie (`next/headers` `cookies()` + `@partylayer/session`'s `createCookieStorage@^1.1.0`) and renders the connected party in the initial HTML: no disconnected→connected flash. The client wraps the app in `PartyLayerKit` with `sessionOptions={{ storage: createCookieStorage() }}` (the same cookie, read synchronously). `next/headers` is imported only in the scaffolded app, never in `@partylayer/session`.
+
+  `create-partylayer-app` now offers two templates: `react-vite` and `next-ssr`.
+
+## 0.1.1
+
+### Patch Changes
+
+- Fix the broken 0.1.0 publish: the tarball shipped without `dist/`, so the `bin` target was missing and `npm create partylayer-app` failed with exit 127.
+
+  Root cause: `tsc` inherits `composite`/`incremental` from the root tsconfig, and `clean` only removed `dist/` (not `tsconfig.tsbuildinfo`). A stale buildinfo made `tsc` skip emit, so a publish from that state produced an empty `dist/`. Fix: `clean` now also wipes `*.tsbuildinfo`, and a `prepublishOnly: "pnpm run clean && pnpm run build"` guard guarantees a fresh `dist/` in every tarball. Verified: a dry-run publish from the exact broken state now packs `dist/index.js`.
+
+## 0.1.0
+
+### Minor Changes
+
+- 25e8345: Initial release of `create-partylayer-app`: the PartyLayer dApp scaffolder.
+
+  `npm create partylayer-app@latest` (also `pnpm`/`yarn create`) spins up a working Canton dApp. Ships the **react-vite** template: React 18 + Vite + zero-config `PartyLayerKit` + `ConnectButton`, wired to connect any registry-verified wallet. Interactive prompts (project dir → template → package manager) with non-interactive flags (`--template`, `--pm`, `--no-install`, `--no-git`) for CI.

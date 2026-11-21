@@ -1,0 +1,80 @@
+# @partylayer/adapter-walletconnect
+
+> **Default application integration:** The React kit already includes this compatibility
+> runtime where applicable. Install `@partylayer/react @tanstack/react-query` in one
+> command and use `PartyLayerKit` with `ConnectButton`; no per-wallet package
+> installation is required. See [the quick start](https://partylayer.xyz/docs/quick-start).
+> The instructions below are for explicitly using this standalone compatibility package.
+> Native provider paths and limits are recorded in the [integration matrix](https://github.com/PartyLayer/PartyLayer/blob/main/docs/wallet-cip0103-matrix.md).
+
+> **Legacy integration.** This package predates the generic bridge and is kept for
+> compatibility; a new wallet should not copy this pattern. New wallets integrate
+> through Path A or Path B with no PartyLayer-specific code, see
+> <https://partylayer.xyz/docs/generic-bridge>.
+
+**Opt-in** WalletConnect adapter for PartyLayer. Wraps the official
+`@canton-network/dapp-sdk` `WalletConnectAdapter` so dApps can connect Canton
+wallets over WalletConnect (hosted/mobile wallets, e.g. Nightly mobile). SIWX,
+the `canton_` method mapping, `session_event` handling, and restore all come
+from the official adapter — this package only adapts it to PartyLayer's
+`WalletAdapter` contract.
+
+## Recommended integration
+
+The default PartyLayer installation already includes this runtime lazily. Existing
+React apps install `@partylayer/react @tanstack/react-query`, render `PartyLayerKit`
+and `ConnectButton`, and pass a WalletConnect Cloud project ID through the shared
+`walletConnect` setting. No extra PartyLayer wallet package registration is needed.
+See the [quick start](https://partylayer.xyz/docs/quick-start).
+
+## Existing explicit integrations
+
+The following low-level setup remains available for compatibility:
+
+```sh
+pnpm add @partylayer/adapter-walletconnect
+# install the OPTIONAL WalletConnect peers (only needed when you use WC):
+pnpm add @walletconnect/sign-client @walletconnect/types
+```
+
+WalletConnect is **not** in `getBuiltinAdapters()`. Register it explicitly:
+
+```ts
+import { WalletConnectAdapter } from '@partylayer/adapter-walletconnect';
+import { createPartyLayer, getBuiltinAdapters } from '@partylayer/sdk';
+
+const wc = new WalletConnectAdapter({
+  projectId: process.env.NEXT_PUBLIC_WC_PROJECT_ID!,
+  metadata: { name: 'My dApp', description: '…', url: 'https://my.app', icons: ['https://my.app/icon.png'] },
+  // onUri is OPTIONAL/advanced — only for a custom QR UI. With @partylayer/react
+  // the connect modal renders the pairing QR + deep-link out of the box (and
+  // suppresses dapp-sdk's blank popup), so you normally don't pass onUri.
+});
+
+const pl = createPartyLayer({ adapters: [...getBuiltinAdapters(), wc] });
+```
+
+## Why dynamic import
+
+`@canton-network/dapp-sdk`'s single barrel entry statically does
+`import SignClient from '@walletconnect/sign-client'` (an **optional** peer). A
+static import would eagerly pull `@walletconnect/sign-client` and break
+webpack/Next consumers that haven't installed it. So this adapter imports the
+barrel **only via dynamic `import()`** inside `connect()`/`restore()` — never at
+module load. `detectInstalled()` is pure and reports no local installation, so rendering the
+picker never pulls dapp-sdk either. Apps that don't opt in never reference this
+package, so they never bundle dapp-sdk or sign-client.
+
+## Notes
+
+- The requested chain is derived from the configured PartyLayer network unless
+  explicitly overridden with `chainId`. The connected session reports the wallet's
+  actual network; incompatible restored networks require reconnection.
+- The official SDK is pinned to reviewed version **1.8.0**. A matching persisted
+  party, live recognized network and active, unexpired session are required for restore.
+- Capabilities: `connect, disconnect, restore, signMessage, submitTransaction,
+  ledgerApi, events, remoteSigner, deeplink`. `signTransaction` is unsupported
+  (Canton WC fuses sign-and-submit via `prepareExecute`).
+- **Pending (separate step):** a live WC E2E against a real Canton WC wallet +
+  real `projectId` (`NEXT_PUBLIC_WC_PROJECT_ID` / `VITE_WC_PROJECT_ID`). The
+  build/tests do not need a `projectId`.

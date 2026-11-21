@@ -8,6 +8,7 @@ import type {
   WalletAdapter,
   AdapterContext,
   CapabilityKey,
+  Session,
 } from '@partylayer/core';
 import {
   CapabilityNotSupportedError,
@@ -151,7 +152,7 @@ export async function runConformanceTests(
     // If signMessage not in capabilities, calling it should throw CapabilityNotSupportedError
     if (typeof adapter.signMessage === 'function') {
       try {
-        await adapter.signMessage(context, {} as any, { message: 'test' });
+        await adapter.signMessage(context, {} as unknown as Session, { message: 'test' });
         results.push({
           name: 'signMessage throws CapabilityNotSupportedError when not supported',
           passed: false,
@@ -189,9 +190,88 @@ export async function runConformanceTests(
     }
   }
 
+  // Test 5b: restore capability <-> method symmetry.
+  //
+  // We had a real bug where 3 of 5 adapters implemented restore() but did
+  // not declare the 'restore' capability in getCapabilities(). The SDK
+  // checks method presence at runtime so session persistence still worked,
+  // but `wallet.capabilities.includes('restore')` returned false, which
+  // misleads docs consumers and anyone programmatically inspecting caps.
+  //
+  // Enforce both directions:
+  //   - declared-but-missing: capability listed, no method → broken promise
+  //   - implemented-but-undeclared: method exists, capability missing →
+  //     silent drift that hides a feature from consumers
+  {
+    const hasRestoreMethod = typeof adapter.restore === 'function';
+    const declaresRestore = capabilities.includes('restore');
+    if (declaresRestore && !hasRestoreMethod) {
+      results.push({
+        name: 'restore capability declared but method missing',
+        passed: false,
+        error: `${adapter.name}: declares 'restore' capability but does not implement restore()`,
+      });
+    } else if (hasRestoreMethod && !declaresRestore) {
+      results.push({
+        name: 'restore method implemented but capability not declared',
+        passed: false,
+        error:
+          `${adapter.name}: implements restore() but getCapabilities() does not include 'restore'. ` +
+          `Add 'restore' to the returned array so consumers can discover the feature.`,
+      });
+    } else {
+      results.push({
+        name: 'restore capability / method symmetry',
+        passed: true,
+        details: { hasRestoreMethod, declaresRestore },
+      });
+    }
+  }
+
   // Test 6: Error mapping
   // Verify adapter uses mapUnknownErrorToPartyLayerError
   // (This is a code inspection test - hard to test at runtime)
 
   return results;
+}
+
+/**
+ * Network-truthfulness contract.
+ *
+ * An adapter's `connect()` MUST surface the wallet's EFFECTIVE network in
+ * `session.network` (so the SDK can detect a wallet/dApp network mismatch) —
+ * not merely echo the requested `context.network`.
+ *
+ * Drive it with a context whose `.network` differs from the network the wallet
+ * actually reports (`walletReportedNetwork`); a compliant adapter returns
+ * `session.network === walletReportedNetwork`. An adapter that echoes
+ * `context.network` fails the contract.
+ *
+ * Adapters that genuinely cannot read the wallet's network must NOT claim to
+ * (leave `session.network = context.network`) and must be recorded as
+ * "network-reported: no" in the support matrix — they are out of scope for this
+ * contract rather than silently passing it.
+ */
+export async function checkNetworkTruthfulness(
+  adapter: WalletAdapter,
+  context: AdapterContext,
+  walletReportedNetwork: string,
+): Promise<TestResult> {
+  const name = 'connect() session.network is the wallet effective network';
+  try {
+    const result = await adapter.connect(context);
+    const got = result.session.network;
+    const passed = got === walletReportedNetwork;
+    return {
+      name,
+      passed,
+      error: passed
+        ? undefined
+        : `expected session.network='${walletReportedNetwork}' (wallet-reported), got '${String(got)}'` +
+          (got === context.network ? ' — merely echoed context.network' : ''),
+      details: { expected: walletReportedNetwork, got, ctxNetwork: context.network },
+    };
+  } catch (err) {
+    return { name, passed: false, error: err instanceof Error ? err.message : String(err) };
+  }
 }

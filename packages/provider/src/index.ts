@@ -20,6 +20,7 @@ export type { PartyLayerProviderOptions } from './provider';
 // ─── Bridge ─────────────────────────────────────────────────────────────────
 
 export { createProviderBridge } from './bridge';
+export type { BridgeableClient } from './bridge';
 
 // ─── Errors ─────────────────────────────────────────────────────────────────
 
@@ -48,10 +49,22 @@ export { toProviderRpcError, toPartyLayerError } from './error-map';
 
 export {
   discoverInjectedProviders,
+  discoverAnnouncedProviders,
+  discoverProviders,
+  subscribeAnnouncedProviders,
+  waitForAnnouncedProvider,
   waitForProvider,
   isCIP0103Provider,
 } from './discovery';
-export type { DiscoveredProvider } from './discovery';
+export type {
+  DiscoveredProvider,
+  AnnouncedWallet,
+  AnnounceDiscoveryOptions,
+  AnnounceSubscribeOptions,
+  WaitForAnnouncedOptions,
+} from './discovery';
+export { createExtensionChannelProvider } from './extension-channel';
+export type { ExtensionChannelOptions, ExtensionChannelProvider } from './extension-channel';
 
 // ─── Async Wallet ───────────────────────────────────────────────────────────
 

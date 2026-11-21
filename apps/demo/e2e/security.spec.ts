@@ -17,17 +17,19 @@ import { join } from 'path';
 const REGISTRY_DIR = join(process.cwd(), '../../registry');
 
 test.describe('Security Tests', () => {
-  test.beforeEach(async () => {
-    // Ensure we're in mock mode for deterministic tests
-    process.env.NEXT_PUBLIC_MOCK_WALLETS = '1';
-  });
+  // There used to be a beforeEach here setting NEXT_PUBLIC_MOCK_WALLETS='1'
+  // "to ensure we're in mock mode". It did nothing twice over: no product code
+  // reads that variable, and it was assigned in the Playwright process after the
+  // dev server had already started, so it could not have reached the app even if
+  // something read it. Mock mode comes from the provider fixture
+  // (apps/demo/public/mock-cip0103-wallet.js), gated on NODE_ENV.
 
   test.describe('Registry Security', () => {
     test('registry tamper detection -> fallback to cached LKG', async ({ page }) => {
       // This test verifies that tampered registry is rejected
       // and falls back to last-known-good cache
       
-      await page.goto('http://localhost:3000?mockWallets=1');
+      await page.goto('/?mockWallets=1');
       await page.waitForSelector('h1', { timeout: 10000 });
 
       // Verify registry status shows verified
@@ -43,7 +45,7 @@ test.describe('Security Tests', () => {
       // This test verifies sequence downgrade is rejected
       // Unit tests cover the logic; E2E verifies error handling
       
-      await page.goto('http://localhost:3000?mockWallets=1');
+      await page.goto('/?mockWallets=1');
       await page.waitForSelector('h1', { timeout: 10000 });
 
       // Registry client should reject downgrades
@@ -57,7 +59,7 @@ test.describe('Security Tests', () => {
   test.describe('Origin Security', () => {
     test('origin not allowed -> ORIGIN_NOT_ALLOWED error', async ({ page, context }) => {
       // Test origin allowlist enforcement
-      await page.goto('http://localhost:3000?mockWallets=1');
+      await page.goto('/?mockWallets=1');
       await page.waitForSelector('h1', { timeout: 10000 });
 
       // Open connect modal
@@ -71,36 +73,70 @@ test.describe('Security Tests', () => {
       // This is tested in unit tests; E2E verifies error displays correctly
     });
 
-    test('callback origin spoof -> reject', async ({ page }) => {
-      // Test that postMessage from wrong origin is rejected
-      await page.goto('http://localhost:3000?mockWallets=1');
-      
-      // Inject malicious postMessage
-      await page.evaluate(() => {
-        // Simulate postMessage from wrong origin
-        // Real implementation would validate origin in transport layer
-        window.postMessage({
-          type: 'partylayer-callback',
-          state: 'fake-state',
-          partyId: 'party::evil',
-        }, 'https://evil.com');
+    /**
+     * Unsolicited wallet-response traffic must not produce a session.
+     *
+     * This used to be `test.fixme('callback origin spoof -> reject')`, waiting on
+     * a switch that had already been deleted. Two things were wrong with it
+     * beyond being disabled, and both are worth stating because they are easy to
+     * repeat:
+     *
+     *   1. It posted with `targetOrigin: 'https://evil.com'`. A `postMessage`
+     *      whose targetOrigin does not match the receiving window is never
+     *      DELIVERED, so the assertion "no session was created" would have passed
+     *      against a message the page never saw. It proved nothing even in the
+     *      world where it ran.
+     *   2. It claimed to test origin rejection, which a same-page test cannot do:
+     *      `window.postMessage` always stamps the page's own origin, and script
+     *      cannot forge `event.origin`.
+     *
+     * So this asserts the property an e2e CAN establish — the client does not
+     * trust unsolicited protocol traffic — using the real message shape, actually
+     * delivered. The origin guard itself (`extension-channel.ts`, which drops any
+     * event whose `origin` differs from the page's) is exercised where `origin` is
+     * injectable: see the foreign-origin case in
+     * `packages/provider/src/__tests__/extension-channel.test.ts`.
+     */
+    test('unsolicited wallet-response traffic does not create a session', async ({ page }) => {
+      await page.goto('/');
+      const nav = page.locator('header').first();
+      await expect(nav.getByRole('button', { name: /connect wallet/i })).toBeVisible({
+        timeout: 15_000,
       });
 
-      // Should not accept callback from wrong origin
-      // This is tested in transport unit tests
-      // E2E verifies no session is created
-      await page.waitForTimeout(1000);
-      
-      const sessionInfo = page.locator('text=/party/i');
-      const count = await sessionInfo.count();
-      expect(count).toBe(0); // No session should be created
+      // Delivered for real (targetOrigin '*'), in the shape the provider channel
+      // actually parses, claiming a connected account we never asked for.
+      await page.evaluate(() => {
+        for (const id of ['1', '2', 'fake-state', 999]) {
+          window.postMessage(
+            {
+              type: 'SPLICE_WALLET_RESPONSE',
+              target: 'demoWallet',
+              response: {
+                id,
+                result: {
+                  isConnected: true,
+                  account: { partyId: 'party::evil', hint: 'evil' },
+                },
+              },
+            },
+            '*',
+          );
+        }
+      });
+
+      // No correlated request is pending, so the channel must drop all of it.
+      // Assert on the connected indicator, not on absence of the word "party":
+      // the page contains that string in prose.
+      await expect(nav.getByRole('button', { name: /party:/i })).toHaveCount(0);
+      await expect(nav.getByRole('button', { name: /connect wallet/i })).toBeVisible();
     });
   });
 
   test.describe('State Replay Protection', () => {
     test('replay state -> reject', async ({ page }) => {
       // Test that reused state parameter is rejected
-      await page.goto('http://localhost:3000?mockWallets=1');
+      await page.goto('/?mockWallets=1');
       await page.waitForSelector('h1', { timeout: 10000 });
 
       // State replay protection is handled in transport layer
@@ -111,39 +147,29 @@ test.describe('Security Tests', () => {
   });
 
   test.describe('Token Storage Security', () => {
-    test('Bron tokens not persisted by default', async ({ page, context }) => {
-      // Test that Bron access tokens are not persisted unless opt-in
-      await page.goto('http://localhost:3000?mockWallets=1');
-      await page.waitForSelector('h1', { timeout: 10000 });
-
-      // Connect with Bron (mock)
-      const connectButton = page.getByRole('button', { name: /connect/i }).first();
-      await connectButton.click();
-
-      await page.waitForSelector('[role="dialog"]', { timeout: 5000 });
-
-      const bronOption = page.locator('button, li').filter({ hasText: /bron/i }).first();
-      
-      if (await bronOption.count() > 0) {
-        await bronOption.click();
-        await page.waitForTimeout(2000);
-
-        // Verify tokens are not in localStorage by default
-        const localStorage = await page.evaluate(() => {
-          return Object.keys(localStorage).filter(key => 
-            key.includes('bron') || key.includes('token')
-          );
-        });
-
-        expect(localStorage.length).toBe(0); // No tokens persisted
-      }
-    });
+    // REMOVED: 'Bron tokens not persisted by default'.
+    //
+    // The property is real and worth having — Bron writes tokens to storage only
+    // when a storage adapter is supplied (packages/adapters/bron/src/auth.ts), so
+    // "not persisted by default" is a genuine security guarantee. It is NOT
+    // covered today: the adapter's auth.test.ts asserts that a token set directly
+    // can be read back, which is retrieval, not absence of a write.
+    //
+    // But it can never be covered HERE. This demo registers no Bron adapter by
+    // design (Bron needs OAuth credentials a public demo cannot ship), so the
+    // test's own body was written around that: `if (bronOption.count() > 0)`,
+    // with no else. Bron is never in the picker, so the assertion never ran, and
+    // the test would have reported green even with the guard deleted.
+    //
+    // The property belongs in the bron adapter's unit suite, where the storage
+    // adapter is injectable and a write can actually be observed. Tracked as a
+    // follow-up rather than left here as a name with nothing behind it.
   });
 
   test.describe('Transport Security', () => {
     test('transport timeout -> TIMEOUT error', async ({ page }) => {
       // Test timeout handling
-      await page.goto('http://localhost:3000?mockWallets=1');
+      await page.goto('/?mockWallets=1');
       await page.waitForSelector('h1', { timeout: 10000 });
 
       // Timeout behavior is tested in transport unit tests
@@ -155,7 +181,7 @@ test.describe('Security Tests', () => {
 
     test('wallet not installed -> WALLET_NOT_INSTALLED', async ({ page }) => {
       // Test missing wallet error
-      await page.goto('http://localhost:3000');
+      await page.goto('/');
       await page.waitForSelector('h1', { timeout: 10000 });
 
       // In non-mock mode, Console/Loop should show "not installed"

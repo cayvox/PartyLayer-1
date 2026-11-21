@@ -1,0 +1,80 @@
+name: Regression Safety Gate
+
+# Mechanical regression net for PartyLayer. Runs the single `pnpm gate`
+# command, which is the source of truth for "is everything still safe":
+#   typecheck → lint → build (@partylayer/*) → unit tests → CIP-0103
+#   native-path conformance → public-API snapshot diff → registry integrity.
+#
+# Any drift in the public API of a published package, any broken adapter or
+# conformance test, or a dropped cip0103 flag in the registry fails this
+# check. Intended to be a REQUIRED status check via branch protection on
+# main (configure in GitHub repo settings).
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches:
+      - main
+      - chore/regression-safety-gate
+
+# Cancel superseded runs on the same ref to save CI minutes.
+concurrency:
+  group: regression-gate-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    name: pnpm gate
+    # Playwright 1.58 does not support the moving ubuntu-latest image (26.04).
+    runs-on: ubuntu-24.04
+
+    steps:
+      - uses: actions/checkout@v4
+        # fetch-depth: 0 fetches full history AND all tags. gate:release-changeset
+        # compares each publishable package against its `<name>@<version>` release
+        # tag, so the tags must be present; the default shallow checkout has none.
+        with:
+          fetch-depth: 0
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        # Version is read from the root package.json `packageManager` field.
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # The gate's final stage (gate:verify-e2e) runs the mock E2E and security
+      # suites, which need a real browser. ci.yml has always installed chromium
+      # before its own verify:e2e step; this job did not, because until the gate
+      # gained that stage it had no browser-dependent work. Without this the two
+      # suites skip, the gate still passes, and the coverage silently disappears
+      # from every pull request.
+      - name: Install Playwright Chromium
+        run: pnpm --filter partylayer-demo exec playwright install --with-deps chromium
+
+      - name: Run regression safety gate
+        run: pnpm gate
+
+      # `pnpm gate` uploads nothing on its own, so a failure used to leave only
+      # the console. The log now names each failing test, and this keeps the full
+      # report for the cases where the first line is not enough.
+      - name: Upload verification report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: regression-gate-verify-report
+          path: |
+            artifacts/verify/**/*
+            artifacts/packed-wallets/react-audit.json
+          if-no-files-found: ignore
+          retention-days: 30

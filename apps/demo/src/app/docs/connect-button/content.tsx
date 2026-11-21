@@ -29,14 +29,21 @@ function Navbar() {
       <H2 id="props">Props</H2>
       <PropsTable data={[
         { prop: 'label', type: 'string', default: '"Connect Wallet"', description: 'Text shown on the button when disconnected.' },
-        { prop: 'connectedLabel', type: '"address" | "wallet" | "custom"', default: '"address"', description: 'What to display when connected: truncated party ID, wallet name, or custom format.' },
+        { prop: 'accountStatus', type: '"avatar" | "address" | "full"', default: '"full"', description: 'Choose avatar-only, address-only or full account button display.' },
+        { prop: 'connectedLabel', type: '"address" | "wallet" | "custom"', default: '"address"', description: 'What to display when connected: truncated party ID, wallet ID, or custom format.' },
         { prop: 'formatAddress', type: '(partyId: string) => string', description: 'Custom formatter for the connected label. Only used when connectedLabel="custom".' },
         { prop: 'className', type: 'string', description: 'CSS class name for the outer container.' },
         { prop: 'style', type: 'CSSProperties', description: 'Inline styles for the outer container.' },
-        { prop: 'showDisconnect', type: 'boolean', default: 'true', description: 'Whether to show the disconnect option in the connected dropdown.' },
+        { prop: 'showDisconnect', type: 'boolean', default: 'true', description: 'Show the account dropdown and disconnect action. False renders a compact account display without the menu.' },
+        { prop: 'holdings', type: 'AccountHoldings', description: 'Authorized holdings bound to the exact party and CAIP-2 network; shows available and locked balances in the account panel.' },
       ]} />
 
       <H2 id="states">Button States</H2>
+      <P>With optional backend authentication, the same button also offers explicit sign-in and
+        app sign-out. Transactions recorded through useTransactionFlow appear in the account
+        panel automatically. The panel shows the actual connected network, wallet-side change
+        guidance and any supplied authorized holdings. See <A href="/docs/authentication">Authentication</A>,
+        <A href="/docs/transaction-lifecycle">Transaction lifecycle</A> and <A href="/docs/wallet-balances">Wallet balances</A>.</P>
       <P>
         <Code>{'ConnectButton'}</Code> automatically transitions between three states:
       </P>
@@ -50,7 +57,7 @@ function Navbar() {
       <H3>Connecting</H3>
       <P>
         While a wallet connection is in progress, the button shows a loading spinner.
-        This state is automatic — no configuration needed.
+        This state is automatic, no configuration needed.
       </P>
 
       <H3>Connected</H3>
@@ -60,20 +67,33 @@ function Navbar() {
       </P>
       <P>The dropdown shows:</P>
       <UL>
-        <LI><Strong>Status badge</Strong> — green "CONNECTED" indicator</LI>
-        <LI><Strong>Party ID</Strong> — the full connected party ID</LI>
-        <LI><Strong>Wallet name</Strong> — which wallet is connected</LI>
-        <LI><Strong>Disconnect button</Strong> — cleanly ends the session</LI>
+        <LI><Strong>Status badge</Strong>: green "CONNECTED" indicator</LI>
+        <LI><Strong>Party ID</Strong>: the full connected party ID</LI>
+        <LI><Strong>Wallet ID</Strong>: which wallet is connected</LI>
+        <LI><Strong>Disconnect button</Strong>: cleanly ends the session</LI>
       </UL>
+
+      <H2 id="keyboard">Keyboard Navigation</H2>
+      <P>
+        Opening the wallet dialog moves focus inside. Tab and Shift+Tab stay within
+        the dialog; Escape closes it and returns focus to the opener. Wallet-owned
+        approval windows keep their own keyboard handling.
+      </P>
+      <P>
+        The connected account menu supports Enter/Space, Arrow Up/Down, Home/End,
+        Escape to close and return to the account button, and Tab to leave the menu.
+        Avatar-only buttons include an accessible account name. The component's
+        buttons do not submit an enclosing application form.
+      </P>
 
       <H2 id="connected-label">Connected Label Formats</H2>
       <CodeBlock language="tsx">{`// Show truncated party ID (default)
 <ConnectButton connectedLabel="address" />
 // Result: "party::abc1...xyz9"
 
-// Show wallet name
+// Show the wallet ID
 <ConnectButton connectedLabel="wallet" />
-// Result: "Console Wallet"
+// Result: "console"
 
 // Custom format
 <ConnectButton
@@ -93,7 +113,7 @@ function Navbar() {
 
       <Callout type="tip" title="Custom Button">
         If you need full control over the button rendering, use the <Code>{'WalletModal'}</Code> component
-        directly with your own trigger button, plus the <Code>{'useSession'}</Code> and <Code>{'useDisconnect'}</Code> hooks.
+        directly with your own trigger button, plus the <Code>{'useAccount'}</Code> and <Code>{'useDisconnect'}</Code> hooks.
         See <A href="/docs/wallet-modal">WalletModal</A> for details.
       </Callout>
 
@@ -102,17 +122,17 @@ function Navbar() {
         For full control, skip <Code>{'ConnectButton'}</Code> and use hooks directly:
       </P>
       <CodeBlock language="tsx">{`import { useState } from 'react';
-import { WalletModal, useSession, useDisconnect, truncatePartyId } from '@partylayer/react';
+import { WalletModal, useAccount, useDisconnect, truncatePartyId } from '@partylayer/react';
 
 function CustomConnect() {
   const [modalOpen, setModalOpen] = useState(false);
-  const session = useSession();
+  const { isConnected, party } = useAccount();
   const { disconnect } = useDisconnect();
 
-  if (session) {
+  if (isConnected) {
     return (
       <div>
-        <span>{truncatePartyId(String(session.partyId))}</span>
+        <span>{truncatePartyId(String(party))}</span>
         <button onClick={() => disconnect()}>Disconnect</button>
       </div>
     );

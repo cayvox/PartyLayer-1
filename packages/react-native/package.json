@@ -1,0 +1,107 @@
+{
+  "name": "@partylayer/react-native",
+  "version": "2.0.0",
+  "sideEffects": false,
+  "description": "Canton Network wallet integration for React Native: PartyLayer client, CIP-0103 integrations, session storage, hooks and optional Connect Wallet UI.",
+  "main": "./dist/index.js",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "browser": {
+        "types": "./dist/web.d.ts",
+        "import": "./dist/web.mjs",
+        "require": "./dist/web.js"
+      },
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js"
+    },
+    "./ui": {
+      "types": "./dist/ui.d.ts",
+      "import": "./dist/ui.mjs",
+      "require": "./dist/ui.js"
+    },
+    "./async-storage": {
+      "types": "./dist/async-storage.d.ts",
+      "import": "./dist/async-storage.mjs",
+      "require": "./dist/async-storage.js"
+    },
+    "./web": {
+      "types": "./dist/web.d.ts",
+      "import": "./dist/web.mjs",
+      "require": "./dist/web.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "clean": "rm -rf dist",
+    "lint": "eslint src --ext .ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "keywords": [
+    "canton",
+    "wallet",
+    "cip-0103",
+    "react-native",
+    "mobile",
+    "canton-network",
+    "wallet-integration",
+    "typescript",
+    "dapp"
+  ],
+  "author": "PartyLayer Contributors",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/PartyLayer/PartyLayer.git",
+    "directory": "packages/react-native"
+  },
+  "homepage": "https://partylayer.xyz/docs",
+  "bugs": {
+    "url": "https://github.com/PartyLayer/PartyLayer/issues"
+  },
+  "dependencies": {
+    "@partylayer/core": "workspace:^",
+    "@partylayer/session": "workspace:^",
+    "buffer": "^6.0.3",
+    "@partylayer/provider": "workspace:^",
+    "@partylayer/registry-client": "workspace:^"
+  },
+  "peerDependencies": {
+    "@react-native-async-storage/async-storage": ">=1.17.0",
+    "react": ">=18.0.0",
+    "react-native": ">=0.70.0",
+    "react-native-svg": ">=13.0.0",
+    "@partylayer/sdk": "workspace:^"
+  },
+  "peerDependenciesMeta": {
+    "@react-native-async-storage/async-storage": {
+      "optional": true
+    },
+    "react-native-svg": {
+      "optional": true
+    },
+    "@partylayer/sdk": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@testing-library/react": "^14.2.0",
+    "@types/node": "^20.11.0",
+    "@types/react": "^18.2.0",
+    "@types/react-test-renderer": "^18.0.0",
+    "jsdom": "^24.0.0",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "react-test-renderer": "^18.2.0",
+    "tsup": "^8.0.0",
+    "typescript": "^5.3.3",
+    "vitest": "^1.2.0",
+    "@partylayer/sdk": "workspace:^"
+  }
+}

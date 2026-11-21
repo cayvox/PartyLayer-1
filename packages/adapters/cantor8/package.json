@@ -1,6 +1,7 @@
 {
   "name": "@partylayer/adapter-cantor8",
-  "version": "0.2.4",
+  "version": "0.5.3",
+  "sideEffects": false,
   "description": "Cantor8 (C8) Wallet adapter for PartyLayer",
   "main": "./dist/index.js",
   "module": "./dist/index.mjs",
@@ -19,7 +20,8 @@
     "build": "tsup",
     "clean": "rm -rf dist",
     "lint": "eslint src --ext .ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
   },
   "keywords": [
     "canton",
@@ -38,10 +40,12 @@
     "url": "https://github.com/PartyLayer/PartyLayer/issues"
   },
   "dependencies": {
-    "@partylayer/core": "workspace:*"
+    "@cantor8/wallet-connect-sdk": "^0.9.0",
+    "@partylayer/core": "workspace:^"
   },
   "devDependencies": {
     "@types/node": "^20.11.0",
-    "typescript": "^5.3.3"
+    "typescript": "^5.3.3",
+    "vitest": "^1.2.0"
   }
 }

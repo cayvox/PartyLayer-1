@@ -7,17 +7,36 @@
   Access-Control-Allow-Methods: GET, HEAD, OPTIONS
   Access-Control-Allow-Headers: Accept, If-None-Match, Content-Type
   Access-Control-Expose-Headers: ETag, Last-Modified, Cache-Control
-  Cache-Control: public, max-age=300
   Content-Type: application/json; charset=utf-8
+  X-Robots-Tag: noindex
+
+# Cache-Control for .json and .sig is set in _worker.js, NOT here. Two reasons.
+# Pages COMBINES Cache-Control from every matching rule into one header, so a
+# manifest rule's max-age=60 would concatenate with a /*.json max-age=300 into an
+# ambiguous "max-age=300, max-age=60". And a rule here also stamps the worker's
+# not-found response, which would make a 404 for a missing .json cacheable for five
+# minutes. The worker sets one authoritative value per path, and leaves its 404
+# uncacheable. The served values are unchanged: max-age=60 for the manifest,
+# no-cache for health.json, max-age=300 for every other .json and .sig.
 
 # Signature files
 /*.sig
   Access-Control-Allow-Origin: *
   Access-Control-Allow-Methods: GET, HEAD, OPTIONS
   Access-Control-Allow-Headers: Accept, If-None-Match, Content-Type
-  Cache-Control: public, max-age=300
   Content-Type: application/json; charset=utf-8
+  X-Robots-Tag: noindex
 
 # Health check
 /health.json
   Cache-Control: no-cache
+
+# Wallet icons, self-hosted from the registry's own deploy (the registry is the
+# canonical source for its icons, not coupled to any app). One hour, not a day:
+# icons keep plain filenames because contributors add their icon URL by hand in
+# their registry PR, so a corrected mark must propagate without a purge or a
+# content hash. ETags are present, so the hourly revalidation is a 304 (headers
+# only, no image body), which makes the bandwidth cost negligible.
+/wallets/*
+  Cache-Control: public, max-age=3600
+  X-Robots-Tag: noindex

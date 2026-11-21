@@ -13,6 +13,7 @@
  */
 export type ErrorCode =
   | 'WALLET_NOT_FOUND'
+  | 'ADAPTER_NOT_REGISTERED'
   | 'WALLET_NOT_INSTALLED'
   | 'USER_REJECTED'
   | 'ORIGIN_NOT_ALLOWED'
@@ -21,9 +22,22 @@ export type ErrorCode =
   | 'TRANSPORT_ERROR'
   | 'REGISTRY_FETCH_FAILED'
   | 'REGISTRY_VERIFICATION_FAILED'
+  | 'REGISTRY_SIGNATURE_MISSING'
   | 'REGISTRY_SCHEMA_INVALID'
   | 'INTERNAL_ERROR'
-  | 'TIMEOUT';
+  | 'NETWORK_MISMATCH'
+  | 'TIMEOUT'
+  | 'INSUFFICIENT_TRAFFIC'
+  | 'SYNCHRONIZER_ERROR'
+  /**
+   * The WALLET refused the request for a reason of its own — not the user
+   * declining a prompt. Nightly refusing because the tab is unfocused
+   * ("Connect request rejected - tab is not active") is the canonical case:
+   * no prompt was ever shown, so reporting USER_REJECTED told the dApp
+   * something untrue. The wallet's own words are preserved in
+   * `details.originalMessage` and repeated in `message`.
+   */
+  | 'WALLET_REFUSED';
 
 /**
  * Error mapping context
@@ -32,7 +46,7 @@ export interface ErrorMappingContext {
   /** Wallet ID (if applicable) */
   walletId?: string;
   /** Operation phase */
-  phase: 'connect' | 'restore' | 'signMessage' | 'signTransaction' | 'submitTransaction' | 'ledgerApi';
+  phase: 'connect' | 'restore' | 'signMessage' | 'signTransaction' | 'submitTransaction' | 'ledgerApi' | 'requestTransfer';
   /** Transport type */
   transport?: 'injected' | 'popup' | 'deeplink' | 'remote';
   /** Timeout in milliseconds (for timeout errors) */
@@ -106,6 +120,35 @@ export class WalletNotFoundError extends PartyLayerError {
 }
 
 /**
+ * A popup/remote (`transport: 'discovery-adapter'`) wallet was requested by
+ * `walletId`, but its provider adapter — which the app supplies, not the SDK —
+ * was never registered. Distinct from {@link WalletNotFoundError}: the wallet IS
+ * a known registry entry, it's just not wired up. The message is actionable
+ * (how to register it) and is built generically from the registry entry, so it
+ * works for any discovery-adapter wallet. Higher-level UIs (e.g. PartyLayerKit)
+ * can `catch (e instanceof AdapterNotRegisteredError)` to surface wiring help.
+ */
+export class AdapterNotRegisteredError extends PartyLayerError {
+  constructor(
+    walletId: string,
+    info: { name?: string; providerId?: string; adapterPackage?: string } = {}
+  ) {
+    const providerId = info.providerId ?? walletId;
+    const label = info.name ? `"${info.name}" (${walletId})` : `"${walletId}"`;
+    const pkg = info.adapterPackage ? ` (provider from ${info.adapterPackage})` : '';
+    super(
+      `Wallet ${label} is a popup/remote (discovery-adapter) wallet: its provider is ` +
+        `supplied by your app, not bundled${pkg}. Register it with createPartyLayer: ` +
+        `adapters: [{ providerId: '${providerId}', create: (host) => /* new provider adapter */ }]. ` +
+        `See https://partylayer.xyz/docs/wallets`,
+      'ADAPTER_NOT_REGISTERED',
+      { details: { walletId, providerId } }
+    );
+    this.name = 'AdapterNotRegisteredError';
+  }
+}
+
+/**
  * Wallet not installed error
  */
 export class WalletNotInstalledError extends PartyLayerError {
@@ -134,6 +177,26 @@ export class UserRejectedError extends PartyLayerError {
 }
 
 /**
+ * The wallet refused the request for its own reason.
+ *
+ * Distinct from {@link UserRejectedError}: nobody was asked. Use this whenever
+ * the wallet declined without a user-facing prompt — unfocused tab, locked
+ * vault, unsupported network, origin not allowlisted. The wallet's message is
+ * carried through verbatim so a dApp can show it instead of guessing.
+ */
+export class WalletRefusedError extends PartyLayerError {
+  constructor(
+    operation: string,
+    details: { originalMessage: string } & Record<string, unknown>
+  ) {
+    super(`Wallet refused ${operation}: ${details.originalMessage}`, 'WALLET_REFUSED', {
+      details: { operation, ...details },
+    });
+    this.name = 'WalletRefusedError';
+  }
+}
+
+/**
  * Origin not allowed error
  */
 export class OriginNotAllowedError extends PartyLayerError {
@@ -158,6 +221,29 @@ export class SessionExpiredError extends PartyLayerError {
       details: { sessionId },
     });
     this.name = 'SessionExpiredError';
+  }
+}
+
+/**
+ * Network mismatch error — the connected wallet's effective network differs
+ * from the dApp's configured network. Thrown to block wrong-network connects
+ * (policy 'strict') and wrong-network transactions (policy 'guard' | 'strict').
+ */
+export class NetworkMismatchError extends PartyLayerError {
+  /** The dApp's configured (expected) network, CAIP-2 normalized. */
+  public readonly expected: string;
+  /** The wallet's reported (actual) network, CAIP-2 normalized. */
+  public readonly actual: string;
+
+  constructor(expected: string, actual: string) {
+    super(
+      `Wallet is on network "${actual}" but this app requires "${expected}". Switch your wallet's network, then reconnect.`,
+      'NETWORK_MISMATCH',
+      { details: { expected, actual } }
+    );
+    this.name = 'NetworkMismatchError';
+    this.expected = expected;
+    this.actual = actual;
   }
 }
 
@@ -216,6 +302,27 @@ export class RegistryVerificationFailedError extends PartyLayerError {
 }
 
 /**
+ * The registry signature a verifying client requires was definitively absent
+ * (the endpoint answered, and said it is not there).
+ *
+ * Deliberately NOT the same error as a failed verification. A missing signature
+ * is a deployment state: signing has not been published for this channel yet,
+ * or was not published for this release. A failed verification means bytes were
+ * served that do not match the key, which is the case signature checking exists
+ * to catch. Collapsing the two would make an outage indistinguishable from an
+ * attack, and the reflex when that fires in production is to switch verification
+ * off, which is how the control dies.
+ */
+export class RegistrySignatureMissingError extends PartyLayerError {
+  constructor(url: string, details?: Record<string, unknown>) {
+    super(`No registry signature at "${url}"`, 'REGISTRY_SIGNATURE_MISSING', {
+      details: { url, ...details },
+    });
+    this.name = 'RegistrySignatureMissingError';
+  }
+}
+
+/**
  * Registry schema invalid error
  */
 export class RegistrySchemaInvalidError extends PartyLayerError {
@@ -245,12 +352,20 @@ export class InternalError extends PartyLayerError {
  * Timeout error
  */
 export class TimeoutError extends PartyLayerError {
-  constructor(operation: string, timeoutMs: number) {
+  /**
+   * `timeoutMs` is OPTIONAL on purpose. Previously an unknown deadline was
+   * coerced to `0`, so the message read "timed out after 0ms" — a number that
+   * described nothing. When the deadline is genuinely unknown we now say so
+   * rather than inventing a figure.
+   */
+  constructor(operation: string, timeoutMs?: number) {
     super(
-      `Operation "${operation}" timed out after ${timeoutMs}ms`,
+      typeof timeoutMs === 'number'
+        ? `Operation "${operation}" timed out after ${timeoutMs}ms`
+        : `Operation "${operation}" timed out`,
       'TIMEOUT',
       {
-        details: { operation, timeoutMs },
+        details: { operation, ...(typeof timeoutMs === 'number' ? { timeoutMs } : {}) },
       }
     );
     this.name = 'TimeoutError';
@@ -258,8 +373,45 @@ export class TimeoutError extends PartyLayerError {
 }
 
 /**
+ * Insufficient traffic error: the submission was rejected because the member's
+ * traffic allowance (base rate plus any purchased extra) is exhausted. Canton's
+ * sequencer surfaces this as a submission rejection; the operator or user tops up
+ * traffic to proceed.
+ */
+export class InsufficientTrafficError extends PartyLayerError {
+  constructor(message: string, cause?: unknown, details?: Record<string, unknown>) {
+    super(message, 'INSUFFICIENT_TRAFFIC', {
+      cause,
+      details,
+    });
+    this.name = 'InsufficientTrafficError';
+  }
+}
+
+/**
+ * Synchronizer error: a synchronizer level condition the kit surfaces directly,
+ * for example a submission blocked because its disclosed contracts do not all
+ * share one synchronizer, or a synchronizer the app routes to being unavailable.
+ *
+ * This code is additive and kit level: CIP-0103 defines no dedicated synchronizer
+ * code, so it has no wire mapping on the Provider surface and never modifies
+ * CIP-0103 semantics. Canton routing failures observed through a dApp's own Model 2
+ * ledger and registry calls (for example NO_COMMON_DOMAIN) stay the dApp's to
+ * classify and are not raised here. See docs/errors.md.
+ */
+export class SynchronizerError extends PartyLayerError {
+  constructor(message: string, cause?: unknown, details?: Record<string, unknown>) {
+    super(message, 'SYNCHRONIZER_ERROR', {
+      cause,
+      details,
+    });
+    this.name = 'SynchronizerError';
+  }
+}
+
+/**
  * Map unknown errors to PartyLayerError
- * 
+ *
  * This is the single error mapping strategy used by all adapters.
  * It normalizes errors from various sources (wallet SDKs, network, etc.)
  * into typed PartyLayerError instances.
@@ -277,19 +429,47 @@ export function mapUnknownErrorToPartyLayerError(
   if (err instanceof Error) {
     const message = err.message.toLowerCase();
 
-    // User rejection patterns
+    // Traffic exhaustion patterns. Checked BEFORE the rejection branch because
+    // Canton's real rejection string ("Submission was rejected because not traffic
+    // is available: AboveTrafficLimit") contains "rejected". Matches only the
+    // strings Canton actually produces.
     if (
-      message.includes('rejected') ||
-      message.includes('denied') ||
-      message.includes('cancelled') ||
-      message.includes('canceled') ||
-      err.name === 'UserRejectedError'
+      message.includes('insufficient traffic') ||
+      message.includes('abovetrafficlimit')
     ) {
-      return new UserRejectedError(context.phase, {
+      return new InsufficientTrafficError(err.message, err, {
         walletId: context.walletId,
+        phase: context.phase,
         transport: context.transport,
-        originalMessage: err.message,
       });
+    }
+
+    // ── Refusals ────────────────────────────────────────────────────────
+    // STRUCTURED SIGNALS FIRST. A bare substring scan for "rejected" used to
+    // collapse every wallet-side refusal into USER_REJECTED — Nightly's
+    // "Connect request rejected - tab is not active" reported a cancellation
+    // the user never made. Only an explicit signal counts as the user saying no.
+    // `err.name` and EIP-1193 4001 are the only unambiguous "the user said no"
+    // signals. Failing those, the phrasing must actually NAME the user — either
+    // side of the verb — so "rejected by the wallet because X" does not match.
+    const isUserRejection =
+      err.name === 'UserRejectedError' ||
+      (err as { code?: unknown }).code === 4001 ||
+      /\buser\b.{0,24}(reject|den|declin|cancel|abort)|\b(reject|den|declin|cancel|abort)\w{0,32}.{0,24}\bby (?:the )?user\b/.test(
+        message,
+      );
+
+    const detail = {
+      walletId: context.walletId,
+      transport: context.transport,
+      originalMessage: err.message,
+    };
+
+    if (isUserRejection) return new UserRejectedError(context.phase, detail);
+
+    // A refusal that is NOT the user's: keep the wallet's own words.
+    if (/reject|denied|declin|refus/.test(message)) {
+      return new WalletRefusedError(context.phase, detail);
     }
 
     // Timeout patterns
@@ -298,18 +478,26 @@ export function mapUnknownErrorToPartyLayerError(
       message.includes('timed out') ||
       err.name === 'TimeoutError'
     ) {
-      // Try to get timeout from context, or extract from error message, or default to 0
-      let timeoutMs = context.timeoutMs ?? 0;
-      if (timeoutMs === 0) {
-        // Try to extract from message like "timed out after 30000ms" or "timeout after 30s"
-        const msMatch = err.message.match(/(\d+)\s*ms/i);
-        const secMatch = err.message.match(/(\d+)\s*(?:sec|second)/i);
-        if (msMatch) {
-          timeoutMs = parseInt(msMatch[1], 10);
-        } else if (secMatch) {
-          timeoutMs = parseInt(secMatch[1], 10) * 1000;
-        }
-      }
+      // THE NUMBER IN THE MESSAGE WINS. The timeout that actually fired put its
+      // own deadline in the string; `context.timeoutMs` is whatever the calling
+      // layer happened to hold and was previously allowed to overwrite it — that
+      // is how a 120 000 ms race came to be reported as "30000ms". Context is a
+      // FALLBACK now, used only when the message carries no figure, and an
+      // unknown deadline stays unknown instead of becoming 0.
+      const msMatch = err.message.match(/(?:^|\D)(\d{1,10})\s{0,32}ms\b/i);
+      const secMatch = err.message.match(/(?:^|\D)(\d{1,10})\s{0,32}(?:s\b|sec|second)/i);
+      const fromMessage = msMatch
+        ? parseInt(msMatch[1], 10)
+        : secMatch
+          ? parseInt(secMatch[1], 10) * 1000
+          : undefined;
+
+      const timeoutMs =
+        fromMessage ??
+        (typeof context.timeoutMs === 'number' && context.timeoutMs > 0
+          ? context.timeoutMs
+          : undefined);
+
       return new TimeoutError(context.phase, timeoutMs);
     }
 

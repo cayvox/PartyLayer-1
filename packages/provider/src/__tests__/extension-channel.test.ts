@@ -1,0 +1,260 @@
+// @vitest-environment jsdom
+/**
+ * Native splice-wallet target-channel transport tests.
+ *
+ * A mock "extension" listens for SPLICE_WALLET_REQUEST on window and replies
+ * with SPLICE_WALLET_RESPONSE (the protocol from @canton-network/core-types),
+ * so these tests exercise the real postMessage request/response correlation
+ * without @canton-network/dapp-sdk (and without the @walletconnect transitive
+ * that breaks consumer bundles).
+ */
+
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { createExtensionChannelProvider } from '../extension-channel';
+import { discoverAnnouncedProviders, isCIP0103Provider } from '../discovery';
+import { JSON_RPC_ERRORS, ProviderRpcError } from '../errors';
+import type { CIP0103RequestPayload } from '@partylayer/core';
+
+type Reply = (req: { id: string; method: string; params?: unknown }) =>
+  | { result: unknown }
+  | { error: { code: number; message: string; data?: unknown } };
+
+/** Stand up a mock extension that answers SPLICE_WALLET_REQUEST messages. */
+function mockExtension(reply: Reply): () => void {
+  const handler = (event: MessageEvent): void => {
+    const data = event.data as { type?: string; request?: { id: string; method: string; params?: unknown } };
+    if (data?.type !== 'SPLICE_WALLET_REQUEST' || !data.request) return;
+    const out = reply(data.request);
+    // Mirror a real content script: post on the page window with
+    // source === window and the page origin, so the provider's origin/source
+    // guard accepts it.
+    window.dispatchEvent(
+      new MessageEvent('message', {
+        data: { type: 'SPLICE_WALLET_RESPONSE', response: { jsonrpc: '2.0', id: data.request.id, ...out } },
+        source: window,
+        origin: window.location.origin,
+      }),
+    );
+  };
+  window.addEventListener('message', handler as EventListener);
+  return () => window.removeEventListener('message', handler as EventListener);
+}
+
+let stop: (() => void) | undefined;
+afterEach(() => {
+  stop?.();
+  stop = undefined;
+  delete (window as unknown as { canton?: unknown }).canton;
+});
+
+describe('createExtensionChannelProvider', () => {
+  it.each([
+    { name: 'null envelope', payload: null, code: JSON_RPC_ERRORS.INVALID_REQUEST },
+    { name: 'array envelope', payload: [], code: JSON_RPC_ERRORS.INVALID_REQUEST },
+    { name: 'missing method', payload: {}, code: JSON_RPC_ERRORS.INVALID_REQUEST },
+    { name: 'numeric method', payload: { method: 7 }, code: JSON_RPC_ERRORS.INVALID_REQUEST },
+    { name: 'null params', payload: { method: 'status', params: null }, code: JSON_RPC_ERRORS.INVALID_PARAMS },
+    { name: 'boolean params', payload: { method: 'status', params: false }, code: JSON_RPC_ERRORS.INVALID_PARAMS },
+    { name: 'numeric params', payload: { method: 'futureMethod', params: 7 }, code: JSON_RPC_ERRORS.INVALID_PARAMS },
+    { name: 'string params', payload: { method: 'futureMethod', params: 'invalid' }, code: JSON_RPC_ERRORS.INVALID_PARAMS },
+  ])('rejects $name without posting, listening or scheduling a timeout', async ({ payload, code }) => {
+    vi.useFakeTimers();
+    const provider = createExtensionChannelProvider({ target: 'fixture' });
+    const listen = vi.spyOn(window, 'addEventListener');
+    const post = vi.spyOn(window, 'postMessage');
+    try {
+      const result = provider.request(payload as unknown as CIP0103RequestPayload);
+      void result.catch(() => {});
+      expect(result).toBeInstanceOf(Promise);
+      expect(listen).not.toHaveBeenCalled();
+      expect(post).not.toHaveBeenCalled();
+      expect(vi.getTimerCount()).toBe(0);
+      await expect(result).rejects.toBeInstanceOf(ProviderRpcError);
+      await expect(result).rejects.toMatchObject({ code, message: expect.stringMatching(/\S/) });
+    } finally {
+      provider.destroy();
+      vi.restoreAllMocks();
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([
+    { name: 'omitted params', payload: { method: 'futureMethod' } },
+    { name: 'undefined params', payload: { method: 'futureMethod', params: undefined } },
+    { name: 'object params', payload: { method: 'futureMethod', params: { enabled: true } } },
+    { name: 'array params', payload: { method: 'futureMethod', params: ['value', 7] } },
+    { name: 'empty method string', payload: { method: '' } },
+  ])('round-trips a valid unknown method with $name', async ({ payload }) => {
+    stop = mockExtension(request => ({ result: request }));
+    const provider = createExtensionChannelProvider({ target: 'fixture' });
+    try {
+      const result = await provider.request<{ method: string; params?: unknown }>(payload);
+      expect(result.method).toBe(payload.method);
+      expect(result.params).toEqual('params' in payload ? payload.params : undefined);
+    } finally {
+      provider.destroy();
+    }
+  });
+
+  it('is a CIP-0103 provider', () => {
+    const p = createExtensionChannelProvider({ target: 't' });
+    expect(isCIP0103Provider(p)).toBe(true);
+  });
+
+  it('round-trips a request → SPLICE_WALLET_RESPONSE result', async () => {
+    stop = mockExtension((req) => ({ result: { echoed: req.method, params: req.params } }));
+    const p = createExtensionChannelProvider({ target: 'send-target' });
+    const result = await p.request<{ echoed: string; params: unknown }>({
+      method: 'status',
+      params: { a: 1 },
+    });
+    expect(result.echoed).toBe('status');
+    expect(result.params).toEqual({ a: 1 });
+  });
+
+  it('rejects with ProviderRpcError carrying the wallet error code', async () => {
+    stop = mockExtension(() => ({ error: { code: 4001, message: 'User rejected' } }));
+    const p = createExtensionChannelProvider({ target: 't' });
+    await expect(p.request({ method: 'connect' })).rejects.toMatchObject({
+      code: 4001,
+    });
+    await expect(p.request({ method: 'connect' })).rejects.toBeInstanceOf(ProviderRpcError);
+  });
+
+  it('times out when no extension responds', async () => {
+    const p = createExtensionChannelProvider({ target: 't', timeoutMs: 50 });
+    await expect(p.request({ method: 'status' })).rejects.toThrow(/timed out/i);
+  });
+
+  /**
+   * The origin guard, which had no negative test until now.
+   *
+   * `extension-channel.ts` drops any message whose `event.origin` differs from
+   * the page's own. Every case above posts with the correct origin, so the guard
+   * was only ever exercised in the direction that passes — the shape of coverage
+   * that reports green whether or not the check exists.
+   *
+   * This belongs here rather than in an e2e: `window.postMessage` always stamps
+   * the caller's real origin, so a browser test cannot forge a foreign one. A
+   * synthetic MessageEvent can, which is the whole reason the property is
+   * testable at this level and not that one. The demo's e2e asserts the adjacent
+   * property it CAN reach — that unsolicited traffic creates no session.
+   */
+  it('drops a well-formed response that arrives from a foreign origin', async () => {
+    const handler = (event: MessageEvent): void => {
+      const data = event.data as { type?: string; request?: { id: string } };
+      if (data?.type !== 'SPLICE_WALLET_REQUEST' || !data.request) return;
+      // Correct id, correct shape, correct target — everything except the origin.
+      window.dispatchEvent(
+        new MessageEvent('message', {
+          data: {
+            type: 'SPLICE_WALLET_RESPONSE',
+            response: { jsonrpc: '2.0', id: data.request.id, result: { spoofed: true } },
+          },
+          source: window,
+          origin: 'https://evil.example',
+        }),
+      );
+    };
+    window.addEventListener('message', handler as EventListener);
+    stop = () => window.removeEventListener('message', handler as EventListener);
+
+    const p = createExtensionChannelProvider({ target: 't', timeoutMs: 80 });
+    // The ONLY thing preventing resolution is the origin check. If it is removed,
+    // this request resolves with `{ spoofed: true }` instead of timing out.
+    await expect(p.request({ method: 'status' })).rejects.toThrow(/timed out/i);
+  });
+
+  it('only resolves its own request ids (concurrent providers do not cross-talk)', async () => {
+    stop = mockExtension((req) => ({ result: { id: req.id } }));
+    const a = createExtensionChannelProvider({ target: 'a' });
+    const b = createExtensionChannelProvider({ target: 'b' });
+    const [ra, rb] = await Promise.all([
+      a.request<{ id: string }>({ method: 'status' }),
+      b.request<{ id: string }>({ method: 'status' }),
+    ]);
+    expect(ra.id).not.toBe(rb.id); // each got its own correlated response
+  });
+
+  it('local event bus on/emit/removeListener works and chains', () => {
+    const p = createExtensionChannelProvider({ target: 't' });
+    let called = 0;
+    const fn = (): void => {
+      called += 1;
+    };
+    expect(p.on('x', fn)).toBe(p);
+    expect(p.emit('x')).toBe(true);
+    expect(called).toBe(1);
+    expect(p.removeListener('x', fn)).toBe(p);
+    p.emit('x');
+    expect(called).toBe(1);
+  });
+
+  it('forwards only same-window, same-origin notifications for its own target', () => {
+    const a = createExtensionChannelProvider({ target: 'a' });
+    const b = createExtensionChannelProvider({ target: 'b' });
+    const alice = vi.fn(); const bob = vi.fn();
+    a.on('accountsChanged', alice); b.on('accountsChanged', bob);
+    const data = { type: 'SPLICE_WALLET_REQUEST', target: 'a', request: {
+      jsonrpc: '2.0', method: 'accountsChanged', params: [{ partyId: 'party::alice' }],
+    } };
+    window.dispatchEvent(new MessageEvent('message', { data, source: window, origin: 'https://foreign.test' }));
+    window.dispatchEvent(new MessageEvent('message', { data, source: null, origin: window.location.origin }));
+    expect(alice).not.toHaveBeenCalled();
+    window.dispatchEvent(new MessageEvent('message', { data, source: window, origin: window.location.origin }));
+    expect(alice).toHaveBeenCalledTimes(1);
+    expect(alice).toHaveBeenCalledWith([{ partyId: 'party::alice' }]);
+    expect(bob).not.toHaveBeenCalled();
+    a.destroy(); b.destroy();
+  });
+
+  it('does not attach a DOM listener until used and removes it after the last subscriber', () => {
+    const add = vi.spyOn(window, 'addEventListener'); const remove = vi.spyOn(window, 'removeEventListener');
+    const provider = createExtensionChannelProvider({ target: 'cleanup' });
+    expect(add).not.toHaveBeenCalled();
+    const handler = vi.fn(); provider.on('txChanged', handler);
+    const callback = add.mock.calls.find(([name]) => name === 'message')?.[1];
+    expect(callback).toBeDefined();
+    provider.removeListener('txChanged', handler);
+    expect(remove).toHaveBeenCalledWith('message', callback);
+    provider.destroy(); add.mockRestore(); remove.mockRestore();
+  });
+
+  it('destroy rejects an in-flight RPC and prevents a later request from starting', async () => {
+    const provider = createExtensionChannelProvider({ target: 'cleanup' });
+    const request = provider.request({ method: 'connect' });
+    const rejected = expect(request).rejects.toMatchObject({ code: 4900 });
+    provider.destroy(); await rejected;
+    await expect(provider.request({ method: 'connect' })).rejects.toMatchObject({ code: 4900 });
+  });
+});
+
+describe('discoverAnnouncedProviders — default native provider (end-to-end)', () => {
+  it('builds a working provider (no injected createProvider) that round-trips over the target channel', async () => {
+    // Mock extension: announces on request, and answers RPC over postMessage.
+    const onRequestProvider = (): void => {
+      window.dispatchEvent(
+        new CustomEvent('canton:announceProvider', {
+          detail: { providerId: 'send-id', name: 'Send', target: 'send-target' },
+        }),
+      );
+    };
+    window.addEventListener('canton:requestProvider', onRequestProvider);
+    const stopRpc = mockExtension((req) => ({ result: { ok: true, method: req.method } }));
+    stop = () => {
+      window.removeEventListener('canton:requestProvider', onRequestProvider);
+      stopRpc();
+    };
+
+    // No createProvider override → uses the native extension-channel provider.
+    const found = await discoverAnnouncedProviders({ timeoutMs: 0 });
+    expect(found).toHaveLength(1);
+    expect(found[0].id).toBe('send-id');
+    expect(isCIP0103Provider(found[0].provider)).toBe(true);
+
+    const res = await found[0].provider.request<{ ok: boolean; method: string }>({
+      method: 'status',
+    });
+    expect(res).toEqual({ ok: true, method: 'status' });
+  });
+});

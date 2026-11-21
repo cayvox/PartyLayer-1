@@ -1,0 +1,32 @@
+{
+  "name": "@partylayer/studio",
+  "version": "0.0.10",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@codesandbox/sandpack-react": "^2.19.0",
+    "@monaco-editor/react": "^4.7.0",
+    "@partylayer/react": "workspace:^",
+    "@partylayer/sdk": "workspace:^",
+    "@partylayer/session": "workspace:^",
+    "@partylayer/provider": "workspace:^",
+    "@tanstack/react-query": "^5.105.0",
+    "@tanstack/react-query-devtools": "^5.105.0",
+    "next": "^15.5.28",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "typescript": "^5.3.3",
+    "@partylayer/testing": "workspace:^"
+  }
+}
